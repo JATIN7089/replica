@@ -291,6 +291,17 @@ function syncRendererUI() {
   const to2d = document.getElementById('btnUse2D');
   if (to3d) to3d.disabled = view.kind === '3d';
   if (to2d) to2d.disabled = view.kind === '2d';
+  // a plain badge in the top bar so it is obvious whether the world is WebGL 3D
+  // or the 2D compatibility view
+  const badge = document.getElementById('rendererBadge');
+  if (badge) {
+    const three = view.kind === '3d';
+    badge.textContent = three ? '3D' : '2D';
+    badge.classList.toggle('warn', !three);
+    badge.title = three
+      ? 'WebGL 3D world'
+      : `2D compatibility view${view.fallbackReason ? ` — ${view.fallbackReason}` : ''}`;
+  }
 }
 document.getElementById('btnUse3D').onclick = () => setRenderer('3d');
 document.getElementById('btnUse2D').onclick = () => setRenderer('2d');

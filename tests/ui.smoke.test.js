@@ -284,6 +284,10 @@ console.log('\nRenderer & 3D camera');
   ok(!!view, 'the view adapter is mounted');
   ok(view.kind === '2d', 'no WebGL in jsdom → the 2D fallback is used', view.kind);
   ok(!!view.fallbackReason, 'the fallback explains itself', view.fallbackReason);
+  const badge = document.getElementById('rendererBadge');
+  ok(!!badge && badge.textContent === '2D', 'the top bar badge shows the active renderer', badge && badge.textContent);
+  ok(badge.classList.contains('warn'), 'the badge warns when 3D is not in use');
+
   ok(view.screenToTile(640, 360, A.state) != null, 'the fallback picks tiles from screen coordinates');
   const s3 = setRenderer('3d');
   runFrames(3);
