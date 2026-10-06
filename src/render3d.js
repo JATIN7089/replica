@@ -6,14 +6,21 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { BUILDINGS, SEASONS } from './data.js';
 import { hexToWorld, tileById, seasonIndexOf, winterAmount } from './engine.js';
+import { buildBuildingMesh } from './buildings3d.js';
 import {
-  buildTileMesh, buildDecorations, buildBuildingMesh, buildUnitMesh, buildVillagerMesh,
-  hexRingGeometry, HEX_RADIUS, TILE_HEIGHT, WATER_LEVEL,
-  tileElevation, elevationAt, elevationOf, worldToTile, BASE_Y,
+  buildUnitMesh, buildVillagerMesh, buildDeerMesh,
+  hexRingGeometry, HEX_RADIUS, TILE_HEIGHT,
+  buildTreeVariants, buildRockVariants, buildOreVariant, buildRuinVariants, buildPlotVariant,
 } from './models3d.js';
+import {
+  WATER_LEVEL, BASE_Y, terrainHeightAt, elevationAt, elevationOf, worldToTile, tileElevation,
+  buildTerrainMesh, buildWaterMesh, buildTerritoryMesh, buildSeaFloorMesh,
+  terrainSignature, ownershipSignature, drapeGeometry, TERRAIN_STEP,
+} from './terrain3d.js';
+import { buildScatter, scatterSignature } from './scatter3d.js';
 
 // vertical band the terrain occupies: used to bound the picking march
-const TERRAIN_TOP = 1.75;
+const TERRAIN_TOP = 2.2;
 const TERRAIN_BOTTOM = BASE_Y;
 
 // ---------------------------------------------------------------- hex → 3D
@@ -65,10 +72,18 @@ export function rigStep(rig, dt) {
     now.distance = want.distance; now.yaw = want.yaw; now.pitch = want.pitch;
     return now;
   }
-  const k = 1 - Math.exp(-rig.smooth * Math.max(0, Math.min(dt, 0.25)));
-  now.x += (want.target.x - now.x) * k;
+  const step = Math.max(0, Math.min(dt, 0.25));
+  const k = 1 - Math.exp(-rig.smooth * step);
+  // A pan never starts at full speed: the ramp eases the first quarter second in,
+  // and the cap keeps a long pan from lurching (a jumpy camera feels broken even
+  // when the world looks right).
+  const moving = Math.abs(want.target.x - now.x) + Math.abs(want.target.z - now.z) > 1e-4;
+  rig.ramp = moving ? Math.min(1, (rig.ramp || 0) + step / 0.25) : 0;
+  const cap = (7 + rig.distance * 0.38) * rig.ramp * step;
+  const ease = (from, to) => from + Math.max(-cap, Math.min(cap, (to - from) * k));
+  now.x = ease(now.x, want.target.x);
+  now.z = ease(now.z, want.target.z);
   now.y += (want.target.y - now.y) * k;
-  now.z += (want.target.z - now.z) * k;
   now.distance += (want.distance - now.distance) * k;
   // shortest way around the circle
   let dyaw = want.yaw - now.yaw;
@@ -199,50 +214,46 @@ function tileAtGroundPoint(state, x, z) {
 }
 
 /**
- * Screen point → hex tile, on a map with real height. The ground is not flat any
- * more, so the ray is re-intersected with the surface height of the tile it hits
- * until it settles (2–3 passes; it converges immediately on even terrain).
+ * Screen point → hex tile, on the continuous terrain surface. The ray is marched
+ * down through the world and bisected where it first crosses the ground (or the
+ * water surface over a lake), so a click on a mountain flank picks the mountain.
  */
 export function pickTileFromScreen(state, rig, camera, sx, sy, width, height) {
   applyRig(rig, camera);
   _raycaster.setFromCamera(new THREE.Vector2((sx / width) * 2 - 1, -(sy / height) * 2 + 1), camera);
   const { origin, direction } = _raycaster.ray;
   if (direction.y >= -1e-4) {
-    // looking level or up: fall back to the flat ground plane so the horizon
-    // still answers sensibly instead of picking nothing at all
     const hit = screenToGround(rig, camera, sx, sy, width, height);
     return hit ? tileAtGroundPoint(state, hit.x, hit.z) : null;
   }
-  // The terrain is a height field now, so march the ray down through it and stop
-  // where it first goes under the surface. Restricting the march to the world's
-  // vertical band (cliffs are ~2.5 units tall) keeps it to a couple of dozen steps.
-  const tTop = Math.max(0, (origin.y - (TERRAIN_TOP + 0.1)) / -direction.y);
-  const tBottom = Math.max(tTop, (origin.y - (TERRAIN_BOTTOM - 0.1)) / -direction.y);
-  const steps = Math.min(160, Math.max(8, Math.ceil((tBottom - tTop) / 0.22)));
+  const tTop = Math.max(0, (origin.y - (TERRAIN_TOP + 0.4)) / -direction.y);
+  const tBottom = Math.max(tTop, (origin.y - TERRAIN_BOTTOM) / -direction.y);
+  const steps = Math.min(220, Math.max(10, Math.ceil((tBottom - tTop) / (TERRAIN_STEP * 0.9))));
   let prev = tTop;
+  const surface = (x, z) => {
+    const h = terrainHeightAt(state, x, z);
+    if (h == null) return WATER_LEVEL;                 // open sea
+    return Math.max(h, h < WATER_LEVEL ? WATER_LEVEL : h);
+  };
   for (let i = 1; i <= steps; i++) {
     const t = tTop + ((tBottom - tTop) * i) / steps;
     const x = origin.x + direction.x * t;
     const y = origin.y + direction.y * t;
     const z = origin.z + direction.z * t;
-    const tile = worldToTile(state, x, z);
-    const surface = tile ? tileElevation(tile) : 0;
-    if (!tile || y > surface) { prev = t; continue; }
-    // bisect between the last free sample and this one for a clean hit
+    if (y > surface(x, z)) { prev = t; continue; }
     let lo = prev;
     let hi = t;
-    for (let k = 0; k < 5; k++) {
+    for (let k = 0; k < 6; k++) {
       const mid = (lo + hi) / 2;
       const mx = origin.x + direction.x * mid;
       const my = origin.y + direction.y * mid;
       const mz = origin.z + direction.z * mid;
-      const mt = worldToTile(state, mx, mz);
-      if (mt && my <= tileElevation(mt)) hi = mid;
+      if (my <= surface(mx, mz)) hi = mid;
       else lo = mid;
     }
     const hx = origin.x + direction.x * hi;
     const hz = origin.z + direction.z * hi;
-    return worldToTile(state, hx, hz) || tile;
+    return worldToTile(state, hx, hz);
   }
   return null;
 }
@@ -281,6 +292,7 @@ export function createRenderer3D(canvas, opts = {}) {
     new THREE.SphereGeometry(200, 20, 14),
     new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, depthWrite: false, fog: false }),
   );
+  sky.name = 'sky';
   scene.add(sky);
   scene.fog = new THREE.Fog('#93b0c4', 42, 150);
 
@@ -321,23 +333,23 @@ export function createRenderer3D(canvas, opts = {}) {
   // --- world layers
   const layers = {
     terrain: new THREE.Group(),
-    decor: new THREE.Group(),
+    water: new THREE.Group(),
+    scatter: new THREE.Group(),
     territory: new THREE.Group(),
     buildings: new THREE.Group(),
     units: new THREE.Group(),
     workers: new THREE.Group(),
     fx: new THREE.Group(),
   };
-  scene.add(layers.terrain, layers.decor, layers.territory, layers.buildings,
-    layers.units, layers.workers, layers.fx);
+  scene.add(layers.terrain, layers.water, layers.scatter, layers.territory,
+    layers.buildings, layers.units, layers.workers, layers.fx);
 
   const maps = {
-    tiles: new Map(),        // tileId → { slab, decor, base }
-    territory: new Map(),    // tileId → ring
     buildings: new Map(),    // buildingId → { group, type, clan, built, flash }
     units: new Map(),        // unitId → { group, parts, hpBar, prev }
     workers: new Map(),      // buildingId → { group, party: [{ group, parts, seed }], nodeId }
     highlights: new Map(),   // tileId → ring
+    captures: new Map(),     // tileId → ring (transient capture cue)
     markers: new Map(),      // unitId → { line, dot }
     floaters: new Map(),     // floater → sprite
   };
@@ -347,9 +359,103 @@ export function createRenderer3D(canvas, opts = {}) {
   let time = 0;
   let built = false;
   let lastSeasonKey = '';
+  let terrainMesh = null;
+  let waterMesh = null;
+  let seaFloorMesh = null;
+  let territoryMesh = null;
+  let signature = '';
+  let ownSignature = '';
+  let swayTimer = 0;
+  const swayers = [];        // { mesh, items, base:Float32Array } for wind animation
 
-  const ringGeo = hexRingGeometry(HEX_RADIUS * 0.86, HEX_RADIUS * 0.99, TILE_HEIGHT + 0.014);
+  const ringGeo = hexRingGeometry(HEX_RADIUS * 0.9, HEX_RADIUS * 1.0, 0);
   const unitRingGeo = hexRingGeometry(0.26, 0.34, 0.006);
+
+  // ---------------------------------------------------------------- scatter
+  function addInstanced(list, variants, materialOpts, layer) {
+    if (!list.length) return null;
+    const byKind = new Map();
+    for (const item of list) {
+      if (!byKind.has(item.kind)) byKind.set(item.kind, []);
+      byKind.get(item.kind).push(item);
+    }
+    const meshes = [];
+    for (const [kind, items] of byKind) {
+      const variant = variants[kind];
+      if (!variant) continue;
+      const mat = new THREE.MeshStandardMaterial({
+        vertexColors: true, flatShading: true, roughness: 0.95, metalness: 0, ...materialOpts,
+      });
+      const mesh = new THREE.InstancedMesh(variant.geometry, mat, items.length);
+      mesh.castShadow = variant.sway > 0;
+      mesh.receiveShadow = true;
+      const base = new Float32Array(items.length * 16);
+      const dummy = new THREE.Object3D();
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        dummy.position.set(it.x, elevationAt(state, it.x, it.z) + (it.yOffset || 0), it.z);
+        dummy.rotation.set(0, it.rot, 0);
+        dummy.scale.setScalar(it.scale);
+        dummy.updateMatrix();
+        dummy.matrix.toArray(base, i * 16);
+        mesh.setMatrixAt(i, dummy.matrix);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.userData.kind = kind;
+      layer.add(mesh);
+      meshes.push(mesh);
+      if (variant.sway > 0) swayers.push({ mesh, items, base, sway: variant.sway, height: variant.height });
+    }
+    return meshes;
+  }
+
+  function buildScatterMeshes(s) {
+    disposeGroup(layers.scatter);
+    layers.scatter.clear();
+    swayers.length = 0;
+    const data = buildScatter(s);
+    const treeVariants = Object.fromEntries(buildTreeVariants().map((v) => [v.id, v]));
+    const rockVariants = Object.fromEntries([...buildRockVariants(), buildOreVariant()].map((v) => [v.id, v]));
+    const ruinVariants = Object.fromEntries(buildRuinVariants().map((v) => [v.id, v]));
+    const propVariants = { farm: buildPlotVariant('farm'), logs: buildPlotVariant('logs') };
+
+    addInstanced(data.trees, treeVariants, {}, layers.scatter);
+    addInstanced(data.rocks, rockVariants, { roughness: 1 }, layers.scatter);
+    addInstanced(data.ore, { ore: rockVariants.ore }, { roughness: 0.7, metalness: 0.3 }, layers.scatter);
+    addInstanced(data.ruins, ruinVariants, {}, layers.scatter);
+    addInstanced(data.props, propVariants, {}, layers.scatter);
+
+    // a handful of animals: plain meshes, they are few and they move
+    for (const a of data.animals) {
+      const deer = buildDeerMesh(a.rot);
+      deer.position.set(a.x, elevationAt(s, a.x, a.z), a.z);
+      deer.castShadow = true;
+      layers.scatter.add(deer);
+    }
+    return data;
+  }
+
+  /** Wind: lean the trees a little, slowly, with a per-tree phase. */
+  function swayTrees(dt) {
+    if (!swayers.length) return;
+    swayTimer -= dt;
+    if (swayTimer > 0) return;
+    swayTimer = 1 / 24;
+    const dummy = new THREE.Object3D();
+    for (const s2 of swayers) {
+      for (let i = 0; i < s2.items.length; i++) {
+        const it = s2.items[i];
+        const phase = time * 0.9 + it.x * 0.7 + it.z * 0.5;
+        const amount = Math.sin(phase) * 0.045 + Math.sin(phase * 2.3) * 0.02;
+        dummy.position.set(it.x, elevationAt(state, it.x, it.z) + (it.yOffset || 0), it.z);
+        dummy.rotation.set(amount * 0.6, it.rot, amount);
+        dummy.scale.setScalar(it.scale);
+        dummy.updateMatrix();
+        s2.mesh.setMatrixAt(i, dummy.matrix);
+      }
+      s2.mesh.instanceMatrix.needsUpdate = true;
+    }
+  }
 
   function size() {
     const w = canvas.clientWidth || (canvas.parentElement && canvas.parentElement.clientWidth) || 960;
@@ -365,50 +471,59 @@ export function createRenderer3D(canvas, opts = {}) {
 
   // ---------------------------------------------------------------- build
   function buildWorld(s) {
-    disposeGroup(layers.terrain);
-    disposeGroup(layers.decor);
-    layers.terrain.clear();
-    layers.decor.clear();
-    maps.tiles.clear();
-    for (const tile of s.tiles) {
-      const { x, z } = tileTo3D(tile);
-      const mesh = buildTileMesh(tile);
-      mesh.position.set(x, 0, z);
-      layers.terrain.add(mesh);
-      const decor = buildDecorations(tile);
-      decor.position.set(x, 0, z);
-      layers.decor.add(decor);
-      const slab = mesh.getObjectByName('slab');
-      maps.tiles.set(tile.id, { group: mesh, slab, decor, base: slab.material.color.clone() });
+    for (const layer of [layers.terrain, layers.water, layers.territory]) {
+      disposeGroup(layer);
+      layer.clear();
     }
+    terrainMesh = buildTerrainMesh(s);
+    layers.terrain.add(terrainMesh);
+    seaFloorMesh = buildSeaFloorMesh(s);
+    layers.terrain.add(seaFloorMesh);
+    waterMesh = buildWaterMesh(s);
+    layers.water.add(waterMesh);
+    buildScatterMeshes(s);
+    territoryMesh = null;
     built = true;
     lastSeasonKey = '';
+    signature = `${terrainSignature(s)}|${scatterSignature(s)}`;
+    ownSignature = null;   // force the first territory sync: the home land is owned
   }
 
   function syncTerritory(s) {
+    const sig = ownershipSignature(s);
+    if (sig !== ownSignature) {
+      ownSignature = sig;
+      if (territoryMesh) {
+        layers.territory.remove(territoryMesh);
+        disposeGroup(territoryMesh);
+        territoryMesh = null;
+      }
+      territoryMesh = buildTerritoryMesh(s);
+      if (territoryMesh) layers.territory.add(territoryMesh);
+    }
+    // transient cue: a tile being captured glows under the warband
     const wanted = new Set();
     for (const tile of s.tiles) {
-      if (tile.owner == null) continue;
+      if (!(tile.captureProgress > 0)) continue;
       wanted.add(tile.id);
-      const clan = s.clans[tile.owner];
-      let ring = maps.territory.get(tile.id);
+      let ring = maps.captures.get(tile.id);
       if (!ring) {
-        ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
-          color: clan.color, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false,
+        ring = new THREE.Mesh(ringGeo.clone(), new THREE.MeshBasicMaterial({
+          color: '#ffd27a', transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false,
         }));
-        const { x, z } = tileTo3D(tile);
-        ring.position.set(x, tileElevation(tile) + 0.015, z);
-        maps.territory.set(tile.id, ring);
-        layers.territory.add(ring);
+        ring.position.set(tile.x, 0, tile.y);
+        drapeGeometry(s, ring.geometry, tile.x, tile.y, 0.05);
+        maps.captures.set(tile.id, ring);
+        layers.fx.add(ring);
       }
-      ring.material.color.set(clan.color);
-      ring.material.opacity = tile.captureProgress > 0 ? 0.9 : 0.5;
+      ring.material.opacity = 0.35 + tile.captureProgress * 0.45;
     }
-    for (const [id, ring] of maps.territory) {
+    for (const [id, ring] of maps.captures) {
       if (wanted.has(id)) continue;
-      layers.territory.remove(ring);
+      layers.fx.remove(ring);
+      ring.geometry.dispose();
       ring.material.dispose();
-      maps.territory.delete(id);
+      maps.captures.delete(id);
     }
   }
 
@@ -559,29 +674,34 @@ export function createRenderer3D(canvas, opts = {}) {
       if (maps.highlights.has(id)) continue;
       const tile = tileById(s, id);
       if (!tile) continue;
-      const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
-        color, transparent: true, opacity: 0.75, side: THREE.DoubleSide, depthWrite: false,
+      const geo = ringGeo.clone();
+      drapeGeometry(s, geo, tile.x, tile.y, 0.06);
+      const ring = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false,
       }));
-      const { x, z } = tileTo3D(tile);
-      ring.position.set(x, tileElevation(tile) + 0.02, z);
+      ring.position.set(tile.x, 0, tile.y);
       maps.highlights.set(id, ring);
       layers.fx.add(ring);
     }
     for (const [id, ring] of maps.highlights) {
       if (wanted.has(id)) { ring.material.color.set(color); continue; }
       layers.fx.remove(ring);
+      ring.geometry.dispose();
       ring.material.dispose();
       maps.highlights.delete(id);
     }
     if (ui.hoverTile) {
       if (!hoverRing) {
-        hoverRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
-          color: '#ffffff', transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false,
+        hoverRing = new THREE.Mesh(ringGeo.clone(), new THREE.MeshBasicMaterial({
+          color: '#ffffff', transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false,
         }));
         layers.fx.add(hoverRing);
       }
-      const { x, z } = tileTo3D(ui.hoverTile);
-      hoverRing.position.set(x, tileElevation(ui.hoverTile) + 0.02, z);
+      if (hoverRing.userData.tileId !== ui.hoverTile.id) {
+        hoverRing.userData.tileId = ui.hoverTile.id;
+        drapeGeometry(s, hoverRing.geometry, ui.hoverTile.x, ui.hoverTile.y, 0.07);
+        hoverRing.position.set(ui.hoverTile.x, 0, ui.hoverTile.y);
+      }
       hoverRing.visible = true;
     } else if (hoverRing) {
       hoverRing.visible = false;
@@ -822,23 +942,23 @@ export function createRenderer3D(canvas, opts = {}) {
     lastSeasonKey = key;
     paintSky(season.key, winter);
     const tint = SEASON_TINT[season.key];
-    for (const [id, entry] of maps.tiles) {
-      const tile = tileById(s, id);
-      if (!tile) continue;
-      const c = entry.base.clone();
-      if (tile.terrain !== 'lake') {
-        c.lerp(tint, 0.12);
-        c.lerp(SNOW, winter * 0.68);
-      }
-      entry.slab.material.color.copy(c);
+    // one material carries the whole terrain: tint the seasons, whiten it as the
+    // snow settles in
+    if (terrainMesh) {
+      const c = new THREE.Color('#ffffff');
+      c.lerp(tint, 0.16);
+      c.lerp(SNOW, winter * 0.62);
+      terrainMesh.material.color.copy(c);
     }
     const frozen = season.key === 'winter';
-    hemi.intensity = frozen ? 0.62 : 0.8;
-    sun.intensity = frozen ? 1.1 : 1.6;
-    scene.fog.color.set(frozen ? '#bccfe2' : '#93b0c4');
-    for (const [, entry] of maps.tiles) {
-      const water = entry.group.getObjectByName('water');
-      if (water) water.material.opacity = frozen ? 0.96 : 0.82;
+    hemi.intensity = frozen ? 0.66 : 0.85;
+    sun.intensity = frozen ? 1.15 : 1.65;
+    sun.color.set(frozen ? '#e8f0ff' : '#fff4de');
+    scene.fog.color.set(frozen ? '#bccfe2' : '#a8c3d6');
+    if (waterMesh) {
+      waterMesh.material.opacity = frozen ? 0.92 : 0.88;
+      waterMesh.material.color.set(frozen ? '#8fb4cb' : '#3f87ab');
+      waterMesh.material.roughness = frozen ? 0.35 : 0.12;
     }
   }
 
@@ -850,6 +970,10 @@ export function createRenderer3D(canvas, opts = {}) {
   // ---------------------------------------------------------------- draw
   function draw(s, ui, dt) {
     if (!built || state !== s) { state = s; buildWorld(s); }
+    if (signature !== `${terrainSignature(s)}|${scatterSignature(s)}`) {
+      // buildings appeared or vanished: rebuild terrain pads and the scatter
+      buildWorld(s);
+    }
     time += dt;
     size();
     // the camera looks at the ground under its target, and eases towards the
@@ -865,6 +989,12 @@ export function createRenderer3D(canvas, opts = {}) {
     syncHighlights(s, ui);
     syncMarkers(s, ui);
     syncEffects(s);
+    swayTrees(dt);
+    if (waterMesh) {
+      // slow drift so the sea and the lakes are alive
+      const map = waterMesh.material.map;
+      if (map) { map.offset.x = (time * 0.012) % 1; map.offset.y = (time * 0.007) % 1; }
+    }
 
     // keep the shadow camera on the action
     sun.position.set(focus.x + 15, 30, focus.z + 11);

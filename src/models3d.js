@@ -22,33 +22,6 @@ export function hexCornersXZ(radius) {
 }
 
 /** Flat-topped hexagonal prism sitting on y = 0 (bottom) up to y = height. */
-export function hexPrismGeometry(radius, height, topScale = 1) {
-  const c = hexCornersXZ(radius);
-  const top = c.map(([x, z]) => [x * topScale, height, z * topScale]);
-  const bottom = c.map(([x, z]) => [x, 0, z]);
-  const verts = [];
-  const push = (p) => verts.push(p[0], p[1], p[2]);
-  // sides
-  for (let i = 0; i < 6; i++) {
-    const j = (i + 1) % 6;
-    push(bottom[i]); push(top[i]); push(top[j]);
-    push(bottom[i]); push(top[j]); push(bottom[j]);
-  }
-  // top fan
-  for (let i = 0; i < 6; i++) {
-    const j = (i + 1) % 6;
-    push([0, height, 0]); push(top[i]); push(top[j]);
-  }
-  // bottom fan
-  for (let i = 0; i < 6; i++) {
-    const j = (i + 1) % 6;
-    push([0, 0, 0]); push(bottom[j]); push(bottom[i]);
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-  geo.computeVertexNormals();
-  return geo;
-}
 
 /** Flat hexagonal ring used for territory borders and selection highlights. */
 export function hexRingGeometry(inner, outer, y = 0) {
@@ -66,6 +39,8 @@ export function hexRingGeometry(inner, outer, y = 0) {
   geo.computeVertexNormals();
   return geo;
 }
+
+export const prim = {};
 
 export const MAT = {
   stone: () => new THREE.MeshStandardMaterial({ color: '#8b8f99', roughness: 0.95, flatShading: true }),
@@ -127,211 +102,285 @@ function gableRoof(width, depth, height, material, x = 0, y = 0, z = 0, overhang
 }
 
 // ---------------------------------------------------------------- terrain
-// ---------------------------------------------------------------- terrain height
-// The simulation is flat (2D axial hexes); the world is not. Every tile gets a
-// deterministic elevation so the board reads as rolling hills, lake basins and
-// mountain ridges instead of a flat table of counters.
+Object.assign(prim, { box, cyl, cone, sph, gableRoof, hexCornersXZ });
 
-/** Bottom of every tile column: deep enough that steps between tiles never show a gap. */
-export const BASE_Y = -0.95;
-/** Global water surface. Lake tiles sink below it. */
-export const WATER_LEVEL = 0.07;
+/** Merge a Group's meshes into one geometry (used for instanced scatter props). */
+export const mergeMesh = (group) => mergeMeshes(
+  (() => {
+    const out = [];
+    group.traverse((o) => { if (o.isMesh) out.push(o); });
+    return out;
+  })(),
+  { jitter: 0.02 },
+);
 
-function hash01(x, y) {
-  const v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
-  return v - Math.floor(v);
+// ---------------------------------------------------------------- instancing
+/**
+ * Merge a list of meshes into one non-indexed geometry with a `color` attribute,
+ * so a whole tree (trunk + branches + foliage) can be drawn as a single
+ * InstancedMesh. Materials are baked into vertex colours.
+ */
+export function mergeMeshes(meshes, opts = {}) {
+  const positions = [];
+  const normals = [];
+  const colors = [];
+  const tmp = new THREE.Color();
+  for (const mesh of meshes) {
+    if (!mesh) continue;
+    const geo = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+    geo.applyMatrix4(mesh.matrix);
+    const pos = geo.getAttribute('position');
+    const nor = geo.getAttribute('normal');
+    const mat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+    tmp.copy(mat.color || new THREE.Color('#ffffff'));
+    // per-face colour jitter keeps big surfaces from looking flat
+    for (let i = 0; i < pos.count; i += 3) {
+      const j = (Math.sin(i * 12.9898 + (opts.seed || 0)) * 43758.5453) % 1;
+      const k = 1 + j * (opts.jitter || 0.12);
+      for (let v = 0; v < 3; v++) {
+        positions.push(pos.getX(i + v), pos.getY(i + v), pos.getZ(i + v));
+        if (nor) normals.push(nor.getX(i + v), nor.getY(i + v), nor.getZ(i + v));
+        colors.push(tmp.r * k, tmp.g * k, tmp.b * k);
+      }
+    }
+    geo.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  if (normals.length) out.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  else out.computeVertexNormals();
+  out.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  out.computeBoundingSphere();
+  return out;
 }
 
-/** Smooth (value noise) field: hills stay a few tiles wide instead of per-tile noise. */
-function smoothNoise(x, y, cell) {
-  const fx = x / cell;
-  const fy = y / cell;
-  const x0 = Math.floor(fx);
-  const y0 = Math.floor(fy);
-  const tx = fx - x0;
-  const ty = fy - y0;
-  const sx = tx * tx * (3 - 2 * tx);
-  const sy = ty * ty * (3 - 2 * ty);
-  const n00 = hash01(x0, y0);
-  const n10 = hash01(x0 + 1, y0);
-  const n01 = hash01(x0, y0 + 1);
-  const n11 = hash01(x0 + 1, y0 + 1);
-  return (n00 * (1 - sx) + n10 * sx) * (1 - sy) + (n01 * (1 - sx) + n11 * sx) * sy;
+const vMesh = (geometry, color, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1) => {
+  const m = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color }));
+  m.position.set(x, y, z);
+  m.rotation.set(rx, ry, rz);
+  m.scale.set(sx, sy, sz);
+  m.updateMatrix();
+  return m;
+};
+
+/**
+ * Tree variants, each one merged geometry so forests draw as ~3 instanced meshes.
+ * Every tree has a trunk, a few branches and layered foliage.
+ */
+export function buildTreeVariants() {
+  const variants = [];
+  const trunkGeo = new THREE.CylinderGeometry(1, 1.35, 1, 6);
+  const coneGeo = new THREE.ConeGeometry(1, 1, 7);
+
+  // --- pine: broad layered canopy
+  variants.push({
+    id: 'pine',
+    height: 1.9,
+    radius: 0.62,
+    geometry: mergeMeshes([
+      vMesh(trunkGeo, '#5a4028', 0, 0.28, 0, 0, 0, 0, 0.055, 0.56, 0.055),
+      vMesh(trunkGeo, '#6b4a2f', 0.12, 0.5, 0.05, 0, 0, 0.6, 0.03, 0.34, 0.03),
+      vMesh(trunkGeo, '#6b4a2f', -0.1, 0.52, -0.06, 0.5, 0, -0.6, 0.03, 0.3, 0.03),
+      vMesh(coneGeo, '#2f5734', 0, 0.95, 0, 0, 0.4, 0, 0.6, 0.78, 0.6),
+      vMesh(coneGeo, '#356240', 0, 1.32, 0, 0, 1.1, 0, 0.46, 0.62, 0.46),
+      vMesh(coneGeo, '#3c6d47', 0, 1.66, 0, 0, 1.9, 0, 0.3, 0.5, 0.3),
+    ], { seed: 1 }),
+    sway: 0.03,
+  });
+
+  // --- fir: tall and narrow
+  variants.push({
+    id: 'fir',
+    height: 2.3,
+    radius: 0.5,
+    geometry: mergeMeshes([
+      vMesh(trunkGeo, '#4f3822', 0, 0.4, 0, 0, 0, 0, 0.05, 0.8, 0.05),
+      vMesh(coneGeo, '#2a4f31', 0, 1.0, 0, 0, 0.3, 0, 0.5, 0.9, 0.5),
+      vMesh(coneGeo, '#316038', 0, 1.5, 0, 0, 1.0, 0, 0.4, 0.72, 0.4),
+      vMesh(coneGeo, '#38703f', 0, 1.94, 0, 0, 1.7, 0, 0.27, 0.55, 0.27),
+      vMesh(coneGeo, '#3d7a45', 0, 2.24, 0, 0, 2.4, 0, 0.16, 0.36, 0.16),
+    ], { seed: 2 }),
+    sway: 0.035,
+  });
+
+  // --- broadleaf: trunk, two branches and rounded canopies
+  const blobGeo = new THREE.IcosahedronGeometry(1, 0);
+  variants.push({
+    id: 'broadleaf',
+    height: 1.7,
+    radius: 0.7,
+    geometry: mergeMeshes([
+      vMesh(trunkGeo, '#6d5133', 0, 0.4, 0, 0, 0, 0, 0.07, 0.8, 0.07),
+      vMesh(trunkGeo, '#7a5c3a', 0.16, 0.78, 0.08, 0, 0, 0.75, 0.035, 0.42, 0.035),
+      vMesh(trunkGeo, '#7a5c3a', -0.14, 0.82, -0.1, 0, 0, -0.7, 0.035, 0.4, 0.035),
+      vMesh(blobGeo, '#3e6b39', 0.02, 1.12, 0.02, 0, 0.5, 0, 0.52, 0.42, 0.5),
+      vMesh(blobGeo, '#456f3c', -0.3, 1.0, -0.2, 0, 1.4, 0, 0.34, 0.3, 0.34),
+      vMesh(blobGeo, '#4a7a42', 0.32, 1.24, -0.14, 0, 2.3, 0, 0.3, 0.26, 0.3),
+      vMesh(blobGeo, '#527f45', 0.1, 1.4, 0.1, 0, 3.1, 0, 0.26, 0.22, 0.26),
+    ], { seed: 3 }),
+    sway: 0.045,
+  });
+
+  // --- dead/birch accent: thin pale trunk, sparse canopy
+  variants.push({
+    id: 'birch',
+    height: 1.45,
+    radius: 0.36,
+    geometry: mergeMeshes([
+      vMesh(trunkGeo, '#9c9083', 0, 0.38, 0, 0, 0, 0, 0.045, 0.76, 0.045),
+      vMesh(blobGeo, '#7d9a4e', 0, 0.96, 0, 0, 0.8, 0, 0.36, 0.3, 0.36),
+      vMesh(blobGeo, '#88a457', 0.18, 1.12, 0.06, 0, 1.9, 0, 0.26, 0.22, 0.26),
+      vMesh(blobGeo, '#93ad60', -0.1, 1.28, -0.12, 0, 2.7, 0, 0.22, 0.18, 0.22),
+    ], { seed: 4 }),
+    sway: 0.05,
+  });
+
+  return variants;
+}
+
+/** Rock formations: boulder clusters with varied facets, snow-capped peaks. */
+export function buildRockVariants() {
+  const variants = [];
+  const ico = new THREE.IcosahedronGeometry(1, 0);
+  const dode = new THREE.DodecahedronGeometry(1, 0);
+
+  variants.push({
+    id: 'boulder',
+    height: 0.9,
+    radius: 0.55,
+    geometry: mergeMeshes([
+      vMesh(ico, '#6f6f6b', 0, 0.3, 0, 0.3, 0.4, 0.2, 0.5, 0.36, 0.48),
+      vMesh(ico, '#7a7a75', 0.42, 0.2, 0.16, 0.6, 1.1, 0.4, 0.3, 0.24, 0.3),
+      vMesh(ico, '#63635f', -0.32, 0.16, -0.22, 0, 2.1, 0.5, 0.24, 0.2, 0.26),
+    ], { seed: 5, jitter: 0.16 }),
+    sway: 0,
+  });
+
+  variants.push({
+    id: 'crag',
+    height: 1.9,
+    radius: 0.75,
+    geometry: mergeMeshes([
+      vMesh(dode, '#5f5f5d', 0, 0.5, 0, 0.2, 0.5, 0.1, 0.62, 0.62, 0.6),
+      vMesh(dode, '#6b6b67', 0.1, 1.15, 0.05, 0.4, 1.2, 0.2, 0.44, 0.5, 0.42),
+      vMesh(ico, '#eeeeee', 0.1, 1.55, 0.05, 0, 0.7, 0, 0.3, 0.2, 0.28),   // snow cap
+      vMesh(ico, '#575757', -0.45, 0.3, 0.3, 0.5, 2.4, 0.3, 0.26, 0.2, 0.26),
+    ], { seed: 6, jitter: 0.14 }),
+    sway: 0,
+  });
+
+  variants.push({
+    id: 'slab',
+    height: 0.55,
+    radius: 0.6,
+    geometry: mergeMeshes([
+      vMesh(new THREE.BoxGeometry(1.1, 0.32, 0.9), '#73736e', 0, 0.16, 0, 0, 0.4, 0.06, 1, 1, 1),
+      vMesh(new THREE.BoxGeometry(0.7, 0.26, 0.6), '#65655f', 0.5, 0.12, 0.28, 0, 0.9, -0.08, 1, 1, 1),
+      vMesh(new THREE.BoxGeometry(0.5, 0.2, 0.5), '#7d7d78', -0.4, 0.1, -0.3, 0, 1.6, 0.1, 1, 1, 1),
+    ], { seed: 7, jitter: 0.1 }),
+    sway: 0,
+  });
+
+  return variants;
+}
+
+/** Iron ore: dark host rock shot through with bright ore veins. */
+export function buildOreVariant() {
+  const ico = new THREE.IcosahedronGeometry(1, 0);
+  const oct = new THREE.OctahedronGeometry(1, 0);
+  return {
+    id: 'ore',
+    height: 1.2,
+    radius: 0.62,
+    geometry: mergeMeshes([
+      vMesh(ico, '#4f4a4e', 0, 0.34, 0, 0.2, 0.6, 0.2, 0.55, 0.42, 0.52),
+      vMesh(ico, '#5a545a', 0.4, 0.22, 0.3, 0.4, 1.4, 0.2, 0.3, 0.24, 0.3),
+      vMesh(oct, '#c9713a', 0.18, 0.5, 0.18, 0.3, 0.7, 0.4, 0.13, 0.17, 0.13),
+      vMesh(oct, '#d98a45', -0.22, 0.42, -0.12, 0.5, 1.7, 0.2, 0.11, 0.14, 0.11),
+      vMesh(oct, '#b8632f', 0.02, 0.62, -0.3, 0.2, 2.6, 0.5, 0.09, 0.12, 0.09),
+    ], { seed: 8, jitter: 0.1 }),
+    sway: 0,
+  };
+}
+
+/** Ruins: broken walls, pillars and rubble for the ruins tiles. */
+export function buildRuinVariants() {
+  const variants = [];
+  const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+  const cylGeo = new THREE.CylinderGeometry(0.5, 0.55, 1, 7);
+  variants.push({
+    id: 'pillar',
+    height: 1.1,
+    radius: 0.4,
+    geometry: mergeMeshes([
+      vMesh(boxGeo, '#8a8172', 0, 0.42, 0, 0, 0, 0, 0.34, 0.84, 0.34),
+      vMesh(boxGeo, '#978d7d', 0, 0.9, 0, 0, 0.5, 0, 0.44, 0.12, 0.44),
+    ], { seed: 9 }),
+    sway: 0,
+  });
+  variants.push({
+    id: 'wall',
+    height: 0.7,
+    radius: 0.9,
+    geometry: mergeMeshes([
+      vMesh(boxGeo, '#8a8172', 0, 0.3, 0, 0, 0.2, 0, 1.5, 0.6, 0.28),
+      vMesh(boxGeo, '#9a9182', 0.5, 0.62, 0, 0, 0.2, 0, 0.5, 0.18, 0.28),
+      vMesh(boxGeo, '#7f776a', -0.25, 0.1, 0.35, 0, 0.6, 0.1, 0.4, 0.2, 0.4),
+    ], { seed: 10, jitter: 0.12 }),
+    sway: 0,
+  });
+  variants.push({
+    id: 'rubble',
+    height: 0.35,
+    radius: 0.5,
+    geometry: mergeMeshes([
+      vMesh(boxGeo, '#837a6c', 0, 0.1, 0, 0.1, 0.4, 0.1, 0.3, 0.2, 0.26),
+      vMesh(boxGeo, '#8d8475', 0.25, 0.09, 0.2, 0, 1.1, 0, 0.22, 0.18, 0.2),
+      vMesh(boxGeo, '#79705f', -0.2, 0.07, -0.15, 0.2, 2.0, 0.1, 0.2, 0.14, 0.18),
+    ], { seed: 11, jitter: 0.14 }),
+    sway: 0,
+  });
+  variants.push({
+    id: 'arch',
+    height: 1.35,
+    radius: 0.7,
+    geometry: mergeMeshes([
+      vMesh(cylGeo, '#8a8172', -0.5, 0.5, 0, 0, 0, 0, 0.5, 1, 0.5),
+      vMesh(cylGeo, '#8a8172', 0.5, 0.5, 0, 0, 0, 0, 0.5, 1, 0.5),
+      vMesh(boxGeo, '#978d7d', 0, 1.15, 0, 0, 0, 0, 1.6, 0.24, 0.36),
+    ], { seed: 12 }),
+    sway: 0,
+  });
+  return variants;
 }
 
 /**
- * Height of a tile's top surface, in world units. Pure and deterministic, so the
- * renderer, the picking maths and the tests all agree on where the ground is.
+ * Farm: tilled rows and a scarecrow-ish marker, dropped on fertile tiles that
+ * feed the clan. Wood: felled logs and a stump stack.
  */
-export function tileElevation(tile) {
-  if (tile.terrain === 'lake') return WATER_LEVEL - 0.44 + smoothNoise(tile.q + 31, tile.r - 12, 3.5) * 0.12;
-  if (tile.terrain === 'mountain' || tile.terrain === 'iron') {
-    return 1.02 + smoothNoise(tile.q + 40, tile.r - 17, 4.5) * 0.55;
+export function buildPlotVariant(kind) {
+  const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+  const cylGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 6);
+  if (kind === 'farm') {
+    const parts = [];
+    for (let i = -2; i <= 2; i++) {
+      parts.push(vMesh(boxGeo, i % 2 ? '#5d4630' : '#6b5138', 0, 0.03, i * 0.26, 0, 0, 0, 1.5, 0.08, 0.18));
+    }
+    parts.push(vMesh(cylGeo, '#8d6f3f', 0.6, 0.35, -0.5, 0, 0, 0, 0.07, 0.7, 0.07));
+    parts.push(vMesh(cylGeo, '#8d6f3f', 0.6, 0.6, -0.5, 0, 0, Math.PI / 2, 0.05, 0.36, 0.05));
+    return { id: 'farm', height: 0.7, radius: 0.9, geometry: mergeMeshes(parts, { seed: 13, jitter: 0.1 }), sway: 0 };
   }
-  const broad = smoothNoise(tile.q + 7, tile.r + 3, 3.4);
-  const detail = smoothNoise(tile.q * 2 - 5, tile.r * 2 + 11, 1.9);
-  const roll = broad * 0.72 + detail * 0.28;
-  return 0.17 + roll * 0.40;
-}
-
-/** Key format mirrors the engine's hex lookup so state.tileByKey can be read directly. */
-const tileKey = (q, r) => q + ',' + r;
-function hexRoundCoord(q, r) {
-  const s = -q - r;
-  let rq = Math.round(q);
-  let rr = Math.round(r);
-  const rs = Math.round(s);
-  const dq = Math.abs(rq - q);
-  const dr = Math.abs(rr - r);
-  const ds = Math.abs(rs - s);
-  if (dq > dr && dq > ds) rq = -rr - rs;
-  else if (dr > ds) rr = -rq - rs;
-  return { q: rq, r: rr };
-}
-
-/** Tile under a world position (mirrors engine.worldToHex, size 1). */
-export function worldToTile(state, x, z) {
-  const q = (Math.sqrt(3) / 3) * x - z / 3;
-  const r = (2 / 3) * z;
-  const { q: rq, r: rr } = hexRoundCoord(q, r);
-  return state.tileByKey.get(tileKey(rq, rr)) || null;
-}
-
-/** Ground height under an arbitrary world position (for units, effects, markers). */
-export function elevationAt(state, x, z) {
-  const tile = worldToTile(state, x, z);
-  return tile ? tileElevation(tile) : WATER_LEVEL;
-}
-
-/** Ground height of a tile by id. */
-export function elevationOf(state, tileId) {
-  const tile = state.tileById.get(tileId);
-  return tile ? tileElevation(tile) : WATER_LEVEL;
-}
-
-export function buildTileMesh(tile) {
-  const group = new THREE.Group();
-  group.name = `tile-${tile.id}`;
-  const kind = tile.terrain;
-  const isWater = kind === 'lake';
-  const isPeak = kind === 'mountain' || kind === 'iron';
-  const base = new THREE.Color();
-  switch (kind) {
-    case 'forest': base.set('#3f6b45'); break;
-    case 'fertile': base.set('#8f9c47'); break;
-    case 'wildlife': base.set('#527449'); break;
-    case 'lake': base.set('#24506b'); break;
-    case 'mountain': base.set('#6f6d78'); break;
-    case 'iron': base.set('#5d5b66'); break;
-    case 'ruins': base.set('#7f6c56'); break;
-    default: base.set('#6f8c4a');
-  }
-  // slight per-tile variation keeps the field from looking like a spreadsheet
-  const variance = ((tile.id * 2654435761) % 1000) / 1000;
-  base.offsetHSL(0, 0, (variance - 0.5) * 0.05);
-
-  const slabMat = new THREE.MeshStandardMaterial({
-    color: base, roughness: isWater ? 0.5 : 0.95, flatShading: true,
-  });
-  // each column is extruded from a common floor up to its own elevation, so the
-  // map has real height: rolling ground, sunken lake basins, tall rocky ridges
-  const top = tileElevation(tile);
-  const slab = new THREE.Mesh(hexPrismGeometry(HEX_RADIUS * 1.002, top - BASE_Y, isPeak ? 0.55 : 1), slabMat);
-  slab.position.y = BASE_Y;
-  slab.receiveShadow = true;
-  slab.castShadow = isPeak;
-  slab.name = 'slab';
-  group.add(slab);
-
-  if (isWater) {
-    const water = new THREE.Mesh(hexPrismGeometry(HEX_RADIUS * 0.995, 0.05, 1), MAT.water());
-    water.position.y = WATER_LEVEL;
-    water.name = 'water';
-    group.add(water);
-  }
-  if (isPeak) {
-    const peakMat = kind === 'iron' ? MAT.ironOre() : MAT.stone();
-    const peak = cone(0.42, 0.62, peakMat, 0, top + 0.24, 0);
-    peak.rotation.y = variance * Math.PI;
-    peak.castShadow = true;
-    group.add(peak);
-    const snowCap = cone(0.2, 0.26, MAT.snow(), 0, top + 0.45, 0);
-    snowCap.rotation.y = variance * Math.PI;
-    group.add(snowCap);
-  }
-  group.userData.terrainTop = top;
-  return group;
-}
-
-export function buildDecorations(tile, top = tileElevation(tile)) {
-  const group = new THREE.Group();
-  const r = (n) => {
-    const v = Math.sin(tile.id * 12.9898 + n * 78.233) * 43758.5453;
-    return v - Math.floor(v);
+  return {
+    id: 'logs',
+    height: 0.4,
+    radius: 0.5,
+    geometry: mergeMeshes([
+      vMesh(cylGeo, '#7a5a38', 0.2, 0.12, 0.1, Math.PI / 2, 0.3, 0, 0.26, 0.9, 0.26),
+      vMesh(cylGeo, '#6b4d30', 0.24, 0.36, 0.08, Math.PI / 2, 0.2, 0, 0.24, 0.82, 0.24),
+      vMesh(cylGeo, '#7f5f3c', -0.3, 0.14, -0.15, Math.PI / 2, 1.2, 0, 0.22, 0.6, 0.22),
+    ], { seed: 14, jitter: 0.1 }),
+    sway: 0,
   };
-  switch (tile.terrain) {
-    case 'forest': {
-      const count = 3 + Math.floor(r(1) * 2);
-      for (let i = 0; i < count; i++) {
-        const a = r(i + 2) * Math.PI * 2;
-        const d = 0.15 + r(i + 9) * 0.5;
-        const scale = 0.75 + r(i + 5) * 0.5;
-        group.add(tree(scale, r(i + 3), top, Math.cos(a) * d, Math.sin(a) * d));
-      }
-      break;
-    }
-    case 'plains':
-    case 'fertile':
-    case 'wildlife': {
-      const count = tile.terrain === 'fertile' ? 6 : 4;
-      for (let i = 0; i < count; i++) {
-        const a = r(i + 4) * Math.PI * 2;
-        const d = 0.2 + r(i + 7) * 0.55;
-        const tuft = cone(0.045, tile.terrain === 'fertile' ? 0.2 : 0.14, MAT.leaf(0.08 - r(i) * 0.16),
-          Math.cos(a) * d, top + 0.05, Math.sin(a) * d, 4);
-        group.add(tuft);
-      }
-      if (tile.terrain === 'wildlife' && tile.wild > 0) {
-        group.add(deer(r(21) * Math.PI * 2));
-      }
-      break;
-    }
-    case 'ruins': {
-      for (let i = 0; i < 3; i++) {
-        const a = (i / 3) * Math.PI * 2 + r(i) * 0.6;
-        const d = 0.42;
-        const h = 0.35 + r(i + 3) * 0.35;
-        const pillar = box(0.14, h, 0.14, MAT.stone(), Math.cos(a) * d, top + h / 2, Math.sin(a) * d);
-        pillar.rotation.y = r(i + 8) * 0.5;
-        pillar.castShadow = true;
-        group.add(pillar);
-      }
-      const lintel = box(0.5, 0.1, 0.14, MAT.stone(), 0, top + 0.55, -0.42);
-      group.add(lintel);
-      break;
-    }
-    case 'mountain':
-    case 'iron': {
-      for (let i = 0; i < 3; i++) {
-        const a = r(i + 11) * Math.PI * 2;
-        const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(0.1 + r(i + 2) * 0.08, 0), MAT.darkStone());
-        rock.position.set(Math.cos(a) * 0.5, 0.02, Math.sin(a) * 0.5);
-        group.add(rock);
-      }
-      break;
-    }
-    case 'lake': {
-      for (let i = 0; i < 3; i++) {
-        const a = r(i + 13) * Math.PI * 2;
-        const reed = cyl(0.012, 0.012, 0.22, MAT.leaf(-0.05),
-          Math.cos(a) * 0.55, TILE_HEIGHT * 0.7 + 0.12, Math.sin(a) * 0.55, 4);
-        group.add(reed);
-      }
-      break;
-    }
-    default: break;
-  }
-  return group;
 }
 
 function tree(scale = 1, shade = 0.5, y = 0, x = 0, z = 0) {
@@ -358,223 +407,10 @@ function deer(rot = 0) {
   return g;
 }
 
+export function buildDeerMesh(rot = 0) { return deer(rot); }
+
 // ---------------------------------------------------------------- buildings
-export function buildBuildingMesh(type, clanColor = '#e09a3a', bannerColor = '#f0b757', done = true) {
-  const g = new THREE.Group();
-  const cloth = MAT.cloth(clanColor);
-  const banner = MAT.cloth(bannerColor);
-  const wood = MAT.wood();
-  const dark = MAT.darkWood();
-  const thatch = MAT.thatch();
-
-  switch (type) {
-    case 'townhall': {
-      const hall = new THREE.Group();
-      hall.add(box(0.86, 0.34, 0.6, wood, 0, 0.17, 0));
-      hall.add(gableRoof(0.86, 0.6, 0.34, thatch, 0, 0.34, 0));
-      hall.add(box(0.16, 0.24, 0.02, dark, 0, 0.12, 0.31));
-      for (const sx of [-1, 1]) {
-        const post = cyl(0.035, 0.04, 0.5, dark, sx * 0.5, 0.25, 0, 6);
-        hall.add(post);
-        const bannerMesh = box(0.16, 0.26, 0.02, banner, sx * 0.5, 0.42, 0.04);
-        hall.add(bannerMesh);
-      }
-      g.add(hall);
-      break;
-    }
-    case 'house':
-      g.add(box(0.56, 0.26, 0.42, wood, 0, 0.13, 0));
-      g.add(gableRoof(0.56, 0.42, 0.26, thatch, 0, 0.26, 0));
-      g.add(box(0.12, 0.18, 0.02, dark, 0, 0.09, 0.22));
-      break;
-    case 'woodcutter': {
-      g.add(box(0.44, 0.22, 0.34, wood, -0.12, 0.11, 0));
-      g.add(gableRoof(0.44, 0.34, 0.2, thatch, -0.12, 0.22, 0));
-      for (let i = 0; i < 3; i++) {
-        const log = cyl(0.045, 0.045, 0.4, dark, 0.3, 0.045 + i * 0.09, -0.05, 6);
-        log.rotation.z = Math.PI / 2;
-        log.rotation.y = i * 0.2;
-        g.add(log);
-      }
-      g.add(chopBlock(dark, 0.3, 0.02, 0.24));
-      break;
-    }
-    case 'hunter': {
-      g.add(box(0.42, 0.2, 0.32, wood, 0, 0.1, 0));
-      g.add(gableRoof(0.42, 0.32, 0.18, thatch, 0, 0.2, 0));
-      for (let i = 0; i < 3; i++) {
-        const p = cyl(0.012, 0.012, 0.22, MAT.wood(), -0.28 + i * 0.05, 0.11, 0.22, 4);
-        g.add(p);
-      }
-      // drying rack with a pelt
-      g.add(box(0.3, 0.03, 0.03, dark, 0.12, 0.28, 0.24));
-      g.add(box(0.02, 0.28, 0.02, dark, -0.02, 0.14, 0.24));
-      g.add(box(0.02, 0.28, 0.02, dark, 0.26, 0.14, 0.24));
-      g.add(box(0.2, 0.16, 0.01, MAT.cloth('#a5886a'), 0.12, 0.19, 0.24));
-      break;
-    }
-    case 'farm': {
-      const soil = new THREE.MeshStandardMaterial({ color: '#6a5233', roughness: 1, flatShading: true });
-      g.add(box(0.8, 0.05, 0.7, soil, 0, 0.03, 0));
-      for (let row = -1; row <= 1; row++) {
-        g.add(box(0.74, 0.07, 0.07, MAT.leaf(0.16), 0, 0.07, row * 0.2));
-      }
-      g.add(box(0.12, 0.05, 0.7, MAT.leaf(0.1), 0.4, 0.06, 0));
-      g.add(box(0.12, 0.05, 0.7, MAT.leaf(0.1), -0.4, 0.06, 0));
-      break;
-    }
-    case 'fishery': {
-      const deck = box(0.6, 0.06, 0.44, wood, 0, 0.14, 0);
-      g.add(deck);
-      for (const [sx, sz] of [[-0.26, -0.18], [0.26, -0.18], [-0.26, 0.18], [0.26, 0.18]]) {
-        g.add(cyl(0.025, 0.03, 0.16, dark, sx, 0.08, sz, 6));
-      }
-      g.add(box(0.4, 0.2, 0.3, wood, -0.05, 0.28, 0));
-      g.add(gableRoof(0.4, 0.3, 0.18, thatch, -0.05, 0.38, 0));
-      // little boat + net
-      const boat = new THREE.Group();
-      const hull = cyl(0.12, 0.06, 0.36, dark, 0, 0.06, 0, 6);
-      hull.rotation.z = Math.PI / 2;
-      boat.add(hull);
-      boat.position.set(0.34, 0.02, 0.16);
-      boat.rotation.y = 0.6;
-      g.add(boat);
-      break;
-    }
-    case 'mine':
-    case 'ironmine': {
-      const rockMat = type === 'ironmine' ? MAT.ironOre() : MAT.darkStone();
-      const mound = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42, 0), rockMat);
-      mound.position.set(-0.16, 0.16, -0.06);
-      mound.scale.set(1, 0.7, 1);
-      mound.castShadow = true;
-      g.add(mound);
-      g.add(box(0.32, 0.26, 0.06, wood, 0.22, 0.13, 0.2));
-      g.add(box(0.1, 0.24, 0.08, dark, 0.22, 0.12, 0.22));
-      for (const sx of [-1, 1]) g.add(box(0.05, 0.3, 0.05, dark, 0.22 + sx * 0.16, 0.15, 0.2));
-      g.add(box(0.42, 0.05, 0.05, dark, 0.22, 0.3, 0.2));
-      if (type === 'ironmine') {
-        for (let i = 0; i < 4; i++) {
-          const ore = new THREE.Mesh(new THREE.IcosahedronGeometry(0.07, 0), MAT.ironOre());
-          ore.position.set(-0.3 + i * 0.08, 0.05, 0.28 + (i % 2) * 0.08);
-          g.add(ore);
-        }
-      }
-      break;
-    }
-    case 'forge': {
-      g.add(box(0.46, 0.24, 0.36, MAT.darkStone(), 0, 0.12, 0));
-      g.add(gableRoof(0.46, 0.36, 0.2, MAT.darkWood(), 0, 0.24, 0));
-      const chimney = cyl(0.07, 0.09, 0.42, MAT.darkStone(), 0.14, 0.4, -0.08, 6);
-      chimney.castShadow = true;
-      g.add(chimney);
-      const fire = sph(0.07, MAT.ember(), 0.14, 0.62, -0.08, 6);
-      g.add(fire);
-      g.add(box(0.14, 0.1, 0.1, MAT.metal(), -0.24, 0.06, 0.22));
-      g.add(box(0.1, 0.12, 0.1, MAT.wood(), -0.34, 0.06, 0.22));
-      break;
-    }
-    case 'market': {
-      for (let s = 0; s < 2; s++) {
-        const z = -0.16 + s * 0.32;
-        g.add(box(0.5, 0.06, 0.22, wood, 0, 0.14, z));
-        for (const sx of [-1, 1]) g.add(cyl(0.02, 0.02, 0.28, dark, sx * 0.22, 0.14, z, 5));
-        g.add(box(0.52, 0.04, 0.26, MAT.cloth(s ? '#c9553f' : '#4f7fc0'), 0, 0.3, z));
-        g.add(box(0.08, 0.08, 0.08, MAT.gold(), -0.1, 0.2, z));
-        g.add(box(0.09, 0.07, 0.09, MAT.leaf(0.1), 0.12, 0.19, z));
-      }
-      break;
-    }
-    case 'brewery': {
-      g.add(box(0.44, 0.24, 0.36, wood, 0, 0.12, 0));
-      g.add(gableRoof(0.44, 0.36, 0.2, thatch, 0, 0.24, 0));
-      for (let i = 0; i < 3; i++) {
-        const barrel = cyl(0.07, 0.07, 0.18, MAT.wood(), 0.28, 0.09 + (i === 2 ? 0.18 : 0), -0.06 + i * 0.14, 7);
-        g.add(barrel);
-      }
-      g.add(cyl(0.02, 0.02, 0.5, dark, -0.26, 0.25, 0.18, 5));
-      g.add(sph(0.06, MAT.gold(), -0.26, 0.5, 0.18, 6));
-      break;
-    }
-    case 'altar': {
-      const stoneMat = MAT.stone();
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2;
-        const stone = box(0.1, 0.26 + (i % 3) * 0.06, 0.1, stoneMat,
-          Math.cos(a) * 0.42, 0.13, Math.sin(a) * 0.42);
-        stone.rotation.y = a;
-        stone.castShadow = true;
-        g.add(stone);
-      }
-      g.add(cyl(0.14, 0.16, 0.06, MAT.darkStone(), 0, 0.03, 0, 6));
-      const flame = sph(0.09, MAT.ember(), 0, 0.16, 0, 7);
-      g.add(flame);
-      g.add(sph(0.13, MAT.cloth('#f0d27a'), 0, 0.19, 0, 6));
-      break;
-    }
-    case 'barracks': {
-      g.add(box(0.66, 0.3, 0.5, wood, 0, 0.15, 0));
-      g.add(gableRoof(0.66, 0.5, 0.28, MAT.darkWood(), 0, 0.3, 0));
-      g.add(box(0.14, 0.2, 0.02, dark, 0, 0.1, 0.26));
-      // shield wall along the front
-      for (let i = 0; i < 4; i++) {
-        const shield = cyl(0.07, 0.07, 0.03, MAT.cloth(i % 2 ? clanColor : bannerColor), -0.24 + i * 0.16, 0.14, 0.32, 10);
-        shield.rotation.x = Math.PI / 2;
-        g.add(shield);
-      }
-      g.add(cyl(0.02, 0.02, 0.6, dark, 0.34, 0.3, 0.2, 5));
-      g.add(box(0.14, 0.24, 0.02, banner, 0.34, 0.52, 0.2));
-      break;
-    }
-    case 'tower': {
-      const body = cyl(0.2, 0.26, 0.85, wood, 0, 0.42, 0, 7);
-      body.castShadow = true;
-      g.add(body);
-      g.add(cyl(0.3, 0.28, 0.08, MAT.darkWood(), 0, 0.89, 0, 7));
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2;
-        g.add(box(0.07, 0.12, 0.07, MAT.darkWood(), Math.cos(a) * 0.26, 0.99, Math.sin(a) * 0.26));
-      }
-      g.add(cone(0.3, 0.24, MAT.thatch(), 0, 1.16, 0, 7));
-      g.add(box(0.12, 0.2, 0.02, banner, 0.3, 0.6, 0));
-      break;
-    }
-    case 'tradingpost': {
-      g.add(box(0.46, 0.24, 0.36, wood, 0, 0.12, 0));
-      g.add(gableRoof(0.46, 0.36, 0.22, thatch, 0, 0.24, 0));
-      g.add(box(0.16, 0.16, 0.16, MAT.darkWood(), 0.3, 0.08, -0.18));
-      g.add(box(0.14, 0.14, 0.14, MAT.darkWood(), 0.3, 0.08, 0.06));
-      g.add(cyl(0.02, 0.02, 0.55, dark, -0.28, 0.28, 0.2, 5));
-      g.add(box(0.18, 0.12, 0.02, MAT.cloth('#3f7f8f'), -0.28, 0.44, 0.2));
-      break;
-    }
-    default: {
-      g.add(box(0.4, 0.24, 0.36, wood, 0, 0.12, 0));
-      g.add(gableRoof(0.4, 0.36, 0.2, thatch, 0, 0.24, 0));
-    }
-  }
-
-  // clan pennant on everything, so ownership reads at a glance
-  const pennant = box(0.1, 0.16, 0.015, banner, 0.32, 0.42, -0.24);
-  g.add(pennant);
-
-  if (!done) {
-    // scaffolding instead of a finished building
-    const scaffoldMat = new THREE.MeshStandardMaterial({
-      color: '#c8b48a', transparent: true, opacity: 0.55, roughness: 1, flatShading: true,
-    });
-    const scaffold = new THREE.Group();
-    scaffold.add(box(0.9, 0.02, 0.66, scaffoldMat, 0, 0.02, 0));
-    for (const [sx, sz] of [[-0.42, -0.3], [0.42, -0.3], [-0.42, 0.3], [0.42, 0.3]]) {
-      scaffold.add(box(0.045, 0.5, 0.045, scaffoldMat, sx, 0.25, sz));
-    }
-    scaffold.add(box(0.9, 0.04, 0.045, scaffoldMat, 0, 0.42, -0.3));
-    scaffold.add(box(0.9, 0.04, 0.045, scaffoldMat, 0, 0.42, 0.3));
-    scaffold.name = 'scaffold';
-    g.add(scaffold);
-  }
-  return g;
-}
+// (the building catalogue lives in buildings3d.js)
 
 function chopBlock(darkWood, x, y, z) {
   const g = new THREE.Group();

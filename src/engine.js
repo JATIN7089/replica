@@ -83,7 +83,7 @@ function createTile(id, q, r) {
   return {
     id, q, r, x: w.x, y: w.y,
     terrain: 'plains', owner: null, buildings: [],
-    deposit: 0, depositMax: 0, ruinLooted: false, wild: 0,
+    deposit: 0, depositMax: 0, depositKind: null, ruinLooted: false, wild: 0,
     captureClan: null, captureProgress: 0, exploreProgress: 0,
   };
 }
@@ -200,7 +200,7 @@ function generateMap(rng) {
       const cand = tiles
         .filter((t) => [2, 3].includes(hexDist(t, s)) && plainish(t))
         .sort((a, b) => farFromOther(a, b))[0];
-      if (cand) { cand.terrain = 'mountain'; cand.deposit = 'stone'; }
+      if (cand) cand.terrain = 'mountain';   // the deposit itself is set below
     }
     // 2. iron: a second mountain (never eat the only stone source)
     if (!tiles.some((t) => t.terrain === 'iron' && hexDist(t, s) <= 4)) {
@@ -209,12 +209,11 @@ function generateMap(rng) {
         .sort((a, b) => hexDist(a, s) - hexDist(b, s));
       if (mountains.length >= 2) {
         mountains[mountains.length - 1].terrain = 'iron';
-        mountains[mountains.length - 1].deposit = 'iron';
       } else {
         const cand = tiles
           .filter((t) => [3, 4].includes(hexDist(t, s)) && plainish(t))
           .sort((a, b) => farFromOther(a, b))[0];
-        if (cand) { cand.terrain = 'iron'; cand.deposit = 'iron'; }
+        if (cand) cand.terrain = 'iron';
       }
     }
     // 3. water: a lake within 3 tiles for fisheries
@@ -228,8 +227,10 @@ function generateMap(rng) {
 
   // Deposits & wildlife decorations
   for (const t of tiles) {
-    if (t.terrain === 'mountain') { t.deposit = 'stone'; t.depositMax = 200 + Math.floor(rng() * 120); }
-    if (t.terrain === 'iron') { t.deposit = 'iron'; t.depositMax = 120 + Math.floor(rng() * 80); }
+    // `deposit` is the amount left, `depositKind` says what it is. The two used to
+    // be the same field, so mining did `'stone' - 1` and the deposit became NaN.
+    if (t.terrain === 'mountain') { t.depositKind = 'stone'; t.depositMax = 200 + Math.floor(rng() * 120); t.deposit = t.depositMax; }
+    if (t.terrain === 'iron') { t.depositKind = 'iron'; t.depositMax = 120 + Math.floor(rng() * 80); t.deposit = t.depositMax; }
     if (t.terrain === 'wildlife') t.wild = 2 + Math.floor(rng() * 2);
     if (t.terrain === 'forest' && rng() < 0.35) t.wild = 1;
   }

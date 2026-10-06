@@ -63,7 +63,7 @@ const THREE = await import(path.join(root, 'vendor/three.module.min.js'));
 const E = await import(path.join(root, 'src/engine.js'));
 const { aiStep } = await import(path.join(root, 'src/ai.js'));
 const { createRenderer3D } = await import(path.join(root, 'src/render3d.js'));
-const { tileElevation, elevationAt } = await import(path.join(root, 'src/models3d.js'));
+const { tileElevation, elevationAt, WATER_LEVEL } = await import(path.join(root, 'src/terrain3d.js'));
 
 // ---------------------------------------------------------------- fake GL
 function fakeRenderer(canvas) {
@@ -122,12 +122,21 @@ section('World build');
   frames(3);
   ok(gl.frames === 3, 'the 3D renderer draws frames', gl.frames);
   ok(gl.size.w === 1280 && gl.size.h === 720, 'the renderer is sized to the canvas', JSON.stringify(gl.size));
-  ok(countIn(r3d.layers.terrain) === state.tiles.length, 'a mesh exists for every hex tile',
-    `${countIn(r3d.layers.terrain)} / ${state.tiles.length}`);
-  ok(countIn(r3d.layers.decor) === state.tiles.length, 'every tile has decorations', countIn(r3d.layers.decor));
+  const terrainMesh = r3d.layers.terrain.getObjectByName('terrain');
+  ok(countIn(r3d.layers.terrain) === 2 && !!terrainMesh && !!r3d.layers.terrain.getObjectByName('seafloor'),
+    'the island is one continuous mesh over a sea bed, not a mesh per tile',
+    [...r3d.layers.terrain.children].map((o) => o.name).join(','));
+  const terrainVerts = terrainMesh.geometry.getAttribute('position').count;
+  ok(terrainVerts > 3000, 'the terrain is finely tessellated', terrainVerts);
+  ok(terrainMesh.geometry.index.count > 18000, 'the terrain is an indexed grid',
+    terrainMesh.geometry.index.count);
+  ok(!!r3d.layers.water.getObjectByName('water'), 'one animated water surface spans the map');
+  ok(countIn(r3d.layers.scatter) >= 4, 'trees, rocks and props are instanced into the scatter layer',
+    countIn(r3d.layers.scatter));
   ok(gl.triangles > 5000, 'the scene has real geometry', Math.round(gl.triangles));
-  const first = r3d.layers.terrain.children[0];
-  ok(!!first.getObjectByName('slab'), 'tiles are built as slabs');
+  let slabs = 0;
+  r3d.scene.traverse((o) => { if (o.name === 'slab' || o.name === 'tile') slabs++; });
+  ok(slabs === 0, 'no hex slabs anywhere in the world', slabs);
 }
 
 section('Buildings');
@@ -204,7 +213,10 @@ section('Units & combat visuals');
 
 section('Territory, highlights & seasons');
 {
-  ok(countIn(r3d.layers.territory) >= 2, 'territory borders are rendered', countIn(r3d.layers.territory));
+  const wash = r3d.layers.territory.getObjectByName('territory');
+  ok(!!wash && wash.geometry.getAttribute('color').itemSize === 4,
+    'territory is one washed region with per-vertex fade, not hex tiles',
+    countIn(r3d.layers.territory));
   ui.highlightTiles = new Set([state.starts[0].id, ...E.neighborsOf(state.starts[0], state).slice(0, 2).map((t) => t.id)]);
   frames(2, 0.05, false);
   ok(countIn(r3d.layers.fx) >= ui.highlightTiles.size, 'build/settle highlights are rendered',
@@ -215,28 +227,35 @@ section('Territory, highlights & seasons');
   ok(true, 'hover ring updates without errors');
   ui.hoverTile = null;
 
-  const sampleIndex = state.tiles.findIndex((t) => t.terrain === 'plains');
-  const entry = r3d.layers.terrain.children[sampleIndex];
+  const terrainMat = r3d.layers.terrain.getObjectByName('terrain').material;
   // pin the clock to mid-summer, draw, read the terrain colour
   state.time.month = 4;
   state.time.monthProgress = 2;
   frames(2, 0.05, false);
-  const summerColor = entry.getObjectByName('slab').material.color.getHexString();
+  const summerColor = terrainMat.color.getHexString();
   const summerSeason = E.seasonOf(state).key;
   // then pin it to deep winter
   state.time.month = 11;
   state.time.monthProgress = 5;
   frames(2, 0.05, false);
-  const winterColor = entry.getObjectByName('slab').material.color.getHexString();
+  const winterColor = terrainMat.color.getHexString();
   ok(summerSeason === 'summer' && E.seasonOf(state).key === 'winter', 'the season clock was moved');
   ok(summerColor !== winterColor, 'terrain turns white in winter', `${summerColor} → ${winterColor}`);
   const r = parseInt(winterColor.slice(0, 2), 16);
   const g2 = parseInt(winterColor.slice(2, 4), 16);
   const b = parseInt(winterColor.slice(4, 6), 16);
   ok(b > 130 && b >= r - 6 && g2 >= r - 6, 'winter terrain is pale and cold-toned', winterColor);
-  const sr = parseInt(summerColor.slice(0, 2), 16);
-  const sg = parseInt(summerColor.slice(2, 4), 16);
-  ok(sg > sr, 'summer terrain keeps its green cast', summerColor);
+  // The material colour is a seasonal *filter* over the vertex colours, which is
+  // where the grass lives: check the two together, the way the GPU multiplies them.
+  const vcol = r3d.layers.terrain.getObjectByName('terrain').geometry.getAttribute('color');
+  let ar = 0, ag = 0, ab = 0;
+  const n = Math.min(vcol.count, 4000);
+  for (let i = 0; i < n; i++) { ar += vcol.getX(i); ag += vcol.getY(i); ab += vcol.getZ(i); }
+  ar /= n; ag /= n; ab /= n;
+  const sr = parseInt(summerColor.slice(0, 2), 16) / 255 * ar;
+  const sg = parseInt(summerColor.slice(2, 4), 16) / 255 * ag;
+  const sb = parseInt(summerColor.slice(4, 6), 16) / 255 * ab;
+  ok(sg > sr && sg > sb, 'summer ground stays green (tint x vertex colour)', `${sr.toFixed(2)},${sg.toFixed(2)},${sb.toFixed(2)}`);
 }
 
 section('Camera & picking (3D)');
@@ -307,12 +326,21 @@ section('Terrain relief, work parties & ground-aware units');
 
   // --- the map is a real height field, not a flat board
   draw2(2);
-  const tops = r2.layers.terrain.children.map((g) => g.userData.terrainTop);
-  const spread = Math.max(...tops) - Math.min(...tops);
-  ok(spread > 1, 'the terrain has real relief in the scene', spread.toFixed(2));
-  ok(new Set(tops.map((t) => t.toFixed(1))).size > 5, 'many distinct ground levels are drawn');
-  const slabs = r2.layers.terrain.children.map((g) => g.getObjectByName('slab'));
-  ok(slabs.every((sl) => Math.abs(sl.position.y - (-0.95)) < 0.01), 'every column is rooted at the common floor');
+  const terrainGeo = r2.layers.terrain.getObjectByName('terrain').geometry;
+  const verts = terrainGeo.getAttribute('position');
+  let lo = Infinity, hi = -Infinity;
+  const levels = new Set();
+  for (let i = 0; i < verts.count; i++) {
+    const y = verts.getY(i);
+    lo = Math.min(lo, y); hi = Math.max(hi, y);
+    levels.add(y.toFixed(1));
+  }
+  ok(hi - lo > 1, 'the terrain has real relief in the scene', (hi - lo).toFixed(2));
+  ok(levels.size > 20, 'the surface is continuous, not a handful of steps', levels.size);
+  ok(lo < WATER_LEVEL && hi > 1, 'the ground runs from below the water line up to the peaks',
+    `${lo.toFixed(2)} … ${hi.toFixed(2)}`);
+  ok(countIn(r2.layers.terrain) === 2, 'the whole island is two meshes, with no tile columns',
+    countIn(r2.layers.terrain));
 
   // --- buildings stand on their tile's surface
   const startTile = st2.starts[0];
@@ -411,7 +439,9 @@ section('Renderer switching (canvas swap)');
   const r2 = createRenderer3D(replacement, { rendererFactory: () => gl2 });
   r2.draw(state, ui, 0.05);
   ok(gl2.frames === 1, 'the recreated 3D renderer draws on the new canvas', gl2.frames);
-  ok(r2.layers.terrain.children.length === state.tiles.length, 'the world is rebuilt on the new canvas');
+  ok(countIn(r2.layers.terrain) === 2 && !!r2.layers.terrain.getObjectByName('terrain')
+    && !!r2.layers.terrain.getObjectByName('seafloor'), 'the world is rebuilt on the new canvas',
+    [...r2.layers.terrain.children].map((o) => o.name).join(','));
   r2.dispose();
 }
 

@@ -54,7 +54,7 @@ export function serialize(state) {
     })),
     tiles: state.tiles.map((t) => ({
       q: t.q, r: t.r, terrain: t.terrain, owner: t.owner,
-      deposit: t.deposit, depositMax: t.depositMax, ruinLooted: t.ruinLooted,
+      deposit: t.deposit, depositMax: t.depositMax, depositKind: t.depositKind, ruinLooted: t.ruinLooted,
       wild: t.wild, captureClan: t.captureClan, captureProgress: t.captureProgress,
       exploreProgress: t.exploreProgress,
       buildings: t.buildings.map((b) => pick(b,
@@ -116,6 +116,7 @@ export function deserialize(data) {
       id: state.tiles.length, q: td.q, r: td.r, x: w.x, y: w.y,
       terrain: td.terrain || 'plains', owner: td.owner ?? null,
       buildings: [], deposit: num(td.deposit), depositMax: num(td.depositMax),
+      depositKind: td.depositKind || (td.terrain === 'iron' ? 'iron' : td.terrain === 'mountain' ? 'stone' : null),
       ruinLooted: !!td.ruinLooted, wild: num(td.wild),
       captureClan: td.captureClan ?? null, captureProgress: num(td.captureProgress),
       exploreProgress: num(td.exploreProgress),

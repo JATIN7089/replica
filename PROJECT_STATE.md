@@ -1,6 +1,6 @@
 # PROJECT_STATE
 
-_Last updated: 2026-10-06 (session 1, milestone 4)_
+_Last updated: 2026-10-06 (session 1, milestone 5)_
 
 ## Project State
 
@@ -8,21 +8,26 @@ _Last updated: 2026-10-06 (session 1, milestone 4)_
 vendored three.js for the 3D renderer, **zero network dependencies**, no build step. Served statically. Original code/art;
 no Northgard assets are used.
 
-Current version: **v0.4.0 — 3D RTS foundation (height field, RTS camera, workers in the world)**.
+Current version: **v0.5.0 — continuous 3D world (the hex board is gone)**.
 
 * Engine suite: **90/90 passing** (`node tests/engine.test.js`)
 * Save/load suite: **48/48 passing** (`node tests/save.test.js`)
-* 3D model/camera/picking suite: **102/102 passing** (`node tests/render3d.test.js`)
-* 3D integration suite: **72/72 passing** (`node tests/ui.3d.test.js`, jsdom + a fake GL backend)
-* UI smoke suite: **82/82 passing** (`node tests/ui.smoke.test.js`, needs jsdom)
-* Full run: `npm test` (394 assertions)
+* 3D model/camera/picking suite: **251/251 passing** (`node tests/render3d.test.js`)
+* 3D integration suite: **76/76 passing** (`node tests/ui.3d.test.js`, jsdom + a fake GL backend)
+* UI smoke suite: **84/84 passing** (`node tests/ui.smoke.test.js`, needs jsdom)
+* Full run: `npm test` (**549 assertions**)
+
+Visual checkpoint: `docs/preview/world.png` (the whole island) and `docs/preview/buildings.png`
+(the building catalogue), both rendered by `tools/render-preview.mjs`.
 
 ## Current Goal
 
-Milestone 4 is complete: the world is a genuine **3D height field** (rolling ground, lake basins,
-mountain ridges) shown through an elevated Northgard-style RTS camera, with workers physically
-walking to resource nodes in the 3D world. Next goal: **clan differentiation + content**
-(clan-specific passives and starts, neutral monsters, events), then audio.
+Milestone 5 is complete: the world is no longer a hex board. One continuous terrain surface
+(baked height field, vertex-coloured grass/dirt/rock/sand/snow), instanced 3D forests, 3D rocks and
+resource nodes, ruin and farm props, 15 stylized buildings, sky/sun/fog/atmosphere, animated water,
+wind-swayed trees and a geographic (not hexagonal) territory wash. Still open in the art programme:
+**Phase 6 — better units**, atmosphere polish, and **Phase 9 — reduce UI obstruction**. No new
+gameplay systems until the visual foundation is signed off (standing directive).
 
 ## Completed Features
 
@@ -37,7 +42,7 @@ walking to resource nodes in the 3D world. Next goal: **clan differentiation + c
 * **Economy**: food, wood, krowns, stone, iron, lore, fame, happiness; monthly rates shown live in
   the HUD; upkeep per villager/building; deposits deplete; Forge converts iron into +6%/month
   wargear damage (cap +30%).
-* **Buildings**: 14 types with terrain rules, per-type limits, 3 buildings per tile, construction
+* **Buildings**: 15 types with terrain rules, per-type limits, 3 buildings per tile, construction
   timers, worker slots, worker picker in the panel, demolition (50% wood/stone back), building HP
   and destruction.
 * **Workers & population**: idle/assigned villagers, job assignment per building, house-driven pop
@@ -63,11 +68,42 @@ walking to resource nodes in the 3D world. Next goal: **clan differentiation + c
   autosave every in-game year; pause menu (`Esc`/☰) with save/load/export/import/restart; the start
   screen offers "Continue" when a save exists. Derived maps are rebuilt on load, and because the
   RNG state is stored a reloaded game continues *identically* (tested).
-* **3D terrain & world (v0.4.0)**: the map is a real height field — rolling plains (two octaves of
-  value noise), lake beds sunk below a shared water level, and tall mountain/iron ridges. Every hex
-  is a vertical column rooted at a common floor, so cliffs and steps between tiles read as relief.
-  Trees, rocks, ruins, reeds, animals, buildings, units, territory rings, highlights and effects all
-  sit on the surface of their own tile.
+* **Continuous 3D terrain (v0.5.0)**: the island is **one mesh** built from a baked height field
+  (`src/terrain3d.js`) — every tile splats a gaussian bump of its own elevation into a 0.25-unit
+  grid, each tile pins its centre to its exact elevation inside 0.84 units, an fBm term adds rolling
+  ground and a shoreline meander (weighted to zero at tile centres) turns hex edges into bays and
+  headlands. Below the ground: a draped sea bed coloured by depth; above it: one animated water
+  surface at `WATER_LEVEL`, and the shore dives to the sea floor past the outer ring through a
+  noisy mask that never cuts into the outermost ring of gameplay tiles. Verified continuous: no
+  0.05-unit sample jumps more than 0.25, no 0.2-unit step exceeds 0.55, and every lake centre sits
+  under the water line while every land centre stays above it (10 seeds).
+* **Real materials & surface detail (v0.5.0)**: terrain is vertex-coloured (grass/forest floor/
+  fertile/dry grass/dirt/rock/sand/snow/lake bed) with slope→rock, wetness→sand, height→snow,
+  hollow ambient occlusion, two scales of patchy fBm variation and a procedural detail map; water
+  has a scrolling procedural texture with depth-tinted shallows.
+* **3D forests, rocks and resource nodes (v0.5.0)**: instanced pines, firs, broadleaf and birch
+  (trunk + branches + layered foliage, per-tree scale and rotation, saplings beside parents) in
+  deterministic clusters that spill across tile borders; boulders, crags and slabs on broken ground;
+  iron tiles carry dark ore-bearing rock; ruins use pillars/walls/rubble/arches; farms own furrow
+  rows with crops and a scarecrow, woodcutters own log piles; deer wander the wildlife tiles.
+  Trees sway in the wind and the whole scatter layer rebuilds only when its signature changes.
+* **15 stylized buildings (v0.5.0)** (`src/buildings3d.js`): town hall, house, woodcutter's lodge,
+  hunter's lodge, farm (barn + furrow field + scarecrow), fishery, stone mine (cut hillside, timber
+  portal, rails, ore cart) and iron mine, forge with a lit furnace, market, brewery, altar with
+  standing stones, barracks, watchtower and trading post — footing, walls, doors, windows, gable
+  and shingled roofs, banner poles, chimneys, all casting and receiving shadows, with scaffolding
+  while under construction.
+* **Sky, sun, fog and atmosphere (v0.5.0)**: gradient sky dome repainted per season, directional
+  sun with shadow mapping, hemisphere ambient light, distance fog for depth, season-driven light
+  colour/intensity, snow whiten in winter and a season tint over the whole terrain material.
+* **Territory as geography (v0.5.0)**: ownership is drawn as a desaturated ground wash that follows
+  the terrain with a per-vertex fade and a brighter frontier rim, rebuilt when ownership changes;
+  capture cues are rings draped on the actual ground. No hex outlines anywhere.
+* **Tooling: `tools/render-preview.mjs`** — a software rasteriser that loads the *real* three.js
+  scene (the same code path the game uses, with a fake GL backend) and writes a PNG, so the world
+  can be inspected headlessly. `node tools/render-preview.mjs --out shot.png --distance 16
+  --yaw 0.7 --pitch 0.8 --center player`; `--mode buildings` renders the catalogue (see
+  `docs/preview/`).
 * **Northgard-style RTS camera (v0.4.0)**: ~54° downward 3/4 view (clamped 35°–75° so it never
   becomes a flat top-down board), perspective FOV 52°, free orbit (Q/E), tilt (R/F), zoom 7–72
   (wheel/pinch/buttons), pan by drag/minimap/WASD. Pan, zoom, orbit and tilt are eased with a
@@ -81,13 +117,11 @@ walking to resource nodes in the 3D world. Next goal: **clan differentiation + c
   walking from the building to the resource node they exploit, harvesting there with the tool of
   their trade, carrying a load home and starting again. Presentation only — the simulation remains
   authoritative, and the party follows `building.workers` exactly.
-* **3D presentation (v0.3.0)**: the whole board is rendered in 3D through vendored three.js —
-  extruded hex prisms per terrain, decorated forests/mountains/water with gentle motion, buildings
-  and units as procedural low-poly meshes (body/head/arms/weapon parts), clans distinguished by
-  colour + banner, selection rings, shield walls, projectiles, damage floaters and building
-  scaffolding. 3D camera: orbit (Q/E or middle-drag+Ctrl), tilt (R/F), wheel/pinch zoom,
-  middle-drag/WASD pan, and the same click/box select and right-click orders as before. A camera
-  button cluster (rotate left/right, zoom in/out, reset) is in the top bar for touch.
+* **Units in 3D (v0.3.0 → still Phase 6 of the art programme)**: units are procedural low-poly
+  humanoids (body, head, arms, legs, weapon, clothing by clan colour) that stand on and walk across
+  the continuous surface, with selection rings, shield walls, projectiles, damage floaters and
+  building scaffolding. Making them *better* characters (distinct silhouettes per unit type,
+  animation) is the next art phase.
 * **Renderer fallback + switch**: WebGL is probed at boot; without it the game silently falls back
   to the 2D renderer (with a toast explaining why). The pause menu has a
   "Renderer — 3D / 2D" section to switch at will; switching swaps in a fresh canvas element
@@ -98,8 +132,12 @@ walking to resource nodes in the 3D world. Next goal: **clan differentiation + c
 
 ## Features In Progress
 
-* None half-finished. 3D is presentation-only: the hex simulation, balance and save format are
-  unchanged, and saves made in 2D load in 3D and vice versa.
+* **Visual overhaul, Phase 6 (units)** — next up; today's units are the v0.3.0 humanoids.
+* **Phase 7 polish (lighting/atmosphere) and Phase 9 (UI obstruction)** — Phase 7 is partly done
+  (sun/shadows/hemi/fog/sky/water animation/wind), Phase 9 not started.
+* 3D remains presentation-only: the hex simulation, balance and save format are unchanged, and
+  saves made in 2D load in 3D and vice versa. `src/render.js` (2D) survives only as the
+  no-WebGL fallback and is never presented as a way to play.
 
 ## Next Tasks
 
@@ -115,7 +153,7 @@ walking to resource nodes in the 3D world. Next goal: **clan differentiation + c
 
 ## Known Bugs
 
-None known. All five suites pass (364 assertions). Watch list:
+None known. All five suites pass (549 assertions). Watch list:
 
 * Very long sessions (>40 in-game years) only covered in simulation, not in the browser.
 * Touch: two-finger pinch zoom is implemented but only manually verified (jsdom cannot test it).
@@ -146,12 +184,18 @@ index.html → src/main.js ─┬─ src/view.js      (renderer adapter: 3D ⇄ 
   effects into scene groups; it never mutates the simulation. Unit positions come straight from the
   engine's world coordinates (`u.x`, `u.y`) mapped by `hexTo3D`. Game rules stay in `engine.js`.
 * **Terrain height lives in the renderer, not the simulation.** `tileElevation(tile)` is a pure,
-  deterministic function of terrain type and axial coordinates (`src/models3d.js`), so the renderer,
-  the picking maths and the tests all agree on where the ground is without saving elevation into
-  the game state or touching balance.
+  deterministic function of terrain type and axial coordinates (`src/terrain3d.js`), and the whole
+  surface is baked from it once per game into a height grid (`heightFieldFor`, cached on the state).
+  Renderer, picking maths and tests all read the same field, and no elevation is ever saved into
+  the game state.
+* **The height field is the only source of ground truth.** `terrainHeightAt(state, x, z)` is used by
+  the terrain mesh, scatter placement, buildings, units, work parties, markers and the picker, so a
+  change to the field can never desynchronise the world from what the player can click.
 * **Picking marches the height field.** `pickTileFromScreen` walks the mouse ray down through the
-  world's vertical band (~20 samples), then bisects on the surface it crosses. It is exact on
-  cliffs (1345/1345 sampled visible tile centres) and cheap enough for every pointer move.
+  world's vertical band, bisects on the first surface it crosses and returns the tile under that
+  point; water counts as a surface at the water line. It agrees with an independent march of the
+  same ray on every sampled tile centre (2250 samples over five camera angles, including the
+  shallowest legal pitch).
 * **Renderer switching swaps the canvas element.** A canvas that has handed out a 2D context cannot
   create a WebGL context and vice versa, so `view.js` builds the incoming renderer on a brand new
   canvas and only swaps it in once it succeeds — a failed switch leaves a working renderer alone.
@@ -193,6 +237,10 @@ index.html → src/main.js ─┬─ src/view.js      (renderer adapter: 3D ⇄ 
   to it) is imported with a relative ESM specifier. The game must run inside a preview iframe with
   no network access, so a CDN import is not acceptable; the vendored file is loaded lazily — the
   2D path never touches it.
+* **Deposits have a kind and an amount, never both in one field.** `tile.deposit` is the remaining
+  amount and `tile.depositKind` is `'stone'`/`'iron'` (`depositMax` is the original size). They used
+  to be one field, so mining did `'stone' - 1` and quietly made the deposit `NaN` (infinite mines,
+  "NaN / 320" in the UI panel).
 * **Work parties are presentation, recruiting arms villagers.** Staffed buildings spawn worker
   meshes that walk to their resource node; the engine only knows `building.workers`. Related engine
   rule added in v0.4.0: recruiting takes an existing villager (population unchanged, Northgard
@@ -229,10 +277,14 @@ index.html → src/main.js ─┬─ src/view.js      (renderer adapter: 3D ⇄ 
 node tools/serve.mjs         # → http://localhost:8080
 
 # test
-npm test                     # engine + save + 3D + UI suites (364 assertions)
+npm test                     # engine + save + 3D + UI suites (549 assertions)
 npm run test:engine          # no dependencies needed
 npm run test:3d              # 3D models/camera + jsdom 3D integration
 npm i --no-save jsdom && npm run test:ui
+
+# look at the world without a GPU (writes a PNG)
+node tools/render-preview.mjs --out shot.png --distance 16 --yaw 0.7 --pitch 0.8 --center player
+node tools/render-preview.mjs --out village.png --mode buildings --distance 6 --cols 4
 ```
 
 ## Last Stable Milestone
