@@ -63,6 +63,7 @@ const THREE = await import(path.join(root, 'vendor/three.module.min.js'));
 const E = await import(path.join(root, 'src/engine.js'));
 const { aiStep } = await import(path.join(root, 'src/ai.js'));
 const { createRenderer3D } = await import(path.join(root, 'src/render3d.js'));
+const { tileElevation, elevationAt } = await import(path.join(root, 'src/models3d.js'));
 
 // ---------------------------------------------------------------- fake GL
 function fakeRenderer(canvas) {
@@ -288,6 +289,103 @@ section('Long run & cleanup');
     'building meshes match the world', countIn(r3d.layers.buildings));
   r3d.dispose();
   ok(gl.disposed === true, 'dispose releases the GL backend');
+}
+
+
+section('Terrain relief, work parties & ground-aware units');
+{
+  // an isolated world so this section cannot disturb the others
+  const stage2 = document.createElement('div');
+  document.body.appendChild(stage2);
+  const canvas2 = document.createElement('canvas');
+  stage2.appendChild(canvas2);
+  const gl2 = fakeRenderer(canvas2);
+  const r2 = createRenderer3D(canvas2, { rendererFactory: () => gl2 });
+  const st2 = E.createGame({ clanId: 'wolf', difficulty: 'normal', mapSeed: 5 });
+  const ui2 = { selectedUnits: new Set(), highlightTiles: new Set(), highlightCosts: new Map(), hoverTile: null };
+  const draw2 = (n, dt = 0.05) => { for (let i = 0; i < n; i++) { E.step(st2, dt); r2.draw(st2, ui2, dt); } };
+
+  // --- the map is a real height field, not a flat board
+  draw2(2);
+  const tops = r2.layers.terrain.children.map((g) => g.userData.terrainTop);
+  const spread = Math.max(...tops) - Math.min(...tops);
+  ok(spread > 1, 'the terrain has real relief in the scene', spread.toFixed(2));
+  ok(new Set(tops.map((t) => t.toFixed(1))).size > 5, 'many distinct ground levels are drawn');
+  const slabs = r2.layers.terrain.children.map((g) => g.getObjectByName('slab'));
+  ok(slabs.every((sl) => Math.abs(sl.position.y - (-0.95)) < 0.01), 'every column is rooted at the common floor');
+
+  // --- buildings stand on their tile's surface
+  const startTile = st2.starts[0];
+  const built = E.build(st2, startTile.id, 'woodcutter', 0);
+  ok(built.ok, 'a woodcutter can be raised on the start tile', built.reason || '');
+  draw2(200);   // finish construction
+  const campMesh = r2.layers.buildings.children.find((g) => g.userData.buildingId === built.building.id);
+  ok(!!campMesh, 'the woodcutter has a 3D mesh');
+  ok(Math.abs(campMesh.position.y - tileElevation(startTile)) < 1e-6,
+    'the building stands exactly on its tile surface', campMesh.position.y.toFixed(2));
+  ok(campMesh.position.y > 0, 'which is above the water line');
+
+  // --- workers walk out to a resource node and back
+  const assigned = E.assignWorker(st2, built.building.id, 1);
+  ok(assigned.ok, 'a villager can take the woodcutting job', assigned.reason || '');
+  draw2(2);
+  const party = r2.layers.workers.children.find((g) => g.userData.buildingId === built.building.id);
+  ok(!!party, 'the staffed woodcutter has a work party in the world');
+  ok(party.children.length === 1, 'one worker per assigned villager', party.children.length);
+  const nodeTile = st2.tileById.get(party.userData.nodeId);
+  ok(!!nodeTile, 'the party knows which resource node it works');
+  ok(['forest', 'wildlife'].includes(nodeTile.terrain), 'wood is cut in the forest', nodeTile.terrain);
+  const worker = party.children[0];
+  const home = { x: campMesh.position.x, z: campMesh.position.z };
+  const node = { x: nodeTile.x, z: nodeTile.y };
+  let maxFromHome = 0, minFromHome = Infinity, closestToNode = Infinity, moved = 0;
+  let prev = { x: worker.position.x, z: worker.position.z };
+  for (let i = 0; i < 300; i++) {
+    draw2(1);
+    const dHome = Math.hypot(worker.position.x - home.x, worker.position.z - home.z);
+    const dNode = Math.hypot(worker.position.x - node.x, worker.position.z - node.z);
+    maxFromHome = Math.max(maxFromHome, dHome);
+    minFromHome = Math.min(minFromHome, dHome);
+    closestToNode = Math.min(closestToNode, dNode);
+    moved += Math.hypot(worker.position.x - prev.x, worker.position.z - prev.z);
+    prev = { x: worker.position.x, z: worker.position.z };
+  }
+  ok(maxFromHome > 0.5, 'the worker leaves the building and walks to the node', maxFromHome.toFixed(2));
+  ok(minFromHome < 0.3, 'and returns home each round trip', minFromHome.toFixed(2));
+  ok(closestToNode < 0.6, 'it works right at the resource node', closestToNode.toFixed(2));
+  ok(moved > 4, 'it is actually travelling, not sliding in place', moved.toFixed(1));
+  ok(worker.position.y > 0, 'the worker walks on the terrain surface, not on a plane', worker.position.y.toFixed(2));
+
+  // --- units stand on the ground too
+  const warrior = E.spawnUnit(st2, 0, 'warrior', startTile);
+  E.commandMove(st2, [warrior.id], E.neighborsOf(startTile, st2)[0].id);
+  draw2(30);
+  const wMesh = r2.layers.units.children.find((g) => g.userData.unitId === warrior.id);
+  ok(!!wMesh, 'the warrior has a mesh');
+  const groundUnder = elevationAt(st2, warrior.x, warrior.y);
+  ok(Math.abs(wMesh.position.y - groundUnder) < 0.25,
+    'the unit follows the ground as it walks', `${wMesh.position.y.toFixed(2)} vs ${groundUnder.toFixed(2)}`);
+
+  // --- picking respects the terrain height
+  const rig2 = r2.rig;
+  const mountain = st2.tiles.find((t) => t.terrain === 'mountain');
+  r2.centerOn(mountain.x, mountain.y);
+  rig2.distance = 30;
+  draw2(140);   // let the eased camera settle on the mountain
+  const projected = r2.groundToScreen(mountain.x, mountain.y, tileElevation(mountain) + 0.05);
+  ok(projected.x > 0 && projected.x < 1280 && projected.y > 0 && projected.y < 720,
+    'the mountain is on screen', `${projected.x.toFixed(0)},${projected.y.toFixed(0)}`);
+  const picked = r2.screenToTile(st2, projected.x, projected.y);
+  ok(picked && picked.id === mountain.id, 'clicking a mountain picks the mountain, not the ground behind it',
+    picked ? `${picked.q},${picked.r} (${picked.terrain})` : 'null');
+
+  // --- work parties follow the workforce
+  E.assignWorker(st2, built.building.id, -1);
+  draw2(2);
+  ok(!r2.layers.workers.children.some((g) => g.userData.buildingId === built.building.id),
+    'the party disappears when the job is abandoned');
+  ok(countIn(r2.layers.workers) === 0, 'no worker meshes are left behind', countIn(r2.layers.workers));
+  r2.dispose();
 }
 
 section('Renderer switching (canvas swap)');

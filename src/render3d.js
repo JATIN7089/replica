@@ -7,9 +7,14 @@ import * as THREE from '../vendor/three.module.min.js';
 import { BUILDINGS, SEASONS } from './data.js';
 import { hexToWorld, tileById, seasonIndexOf, winterAmount } from './engine.js';
 import {
-  buildTileMesh, buildDecorations, buildBuildingMesh, buildUnitMesh,
-  hexRingGeometry, HEX_RADIUS, TILE_HEIGHT,
+  buildTileMesh, buildDecorations, buildBuildingMesh, buildUnitMesh, buildVillagerMesh,
+  hexRingGeometry, HEX_RADIUS, TILE_HEIGHT, WATER_LEVEL,
+  tileElevation, elevationAt, elevationOf, worldToTile, BASE_Y,
 } from './models3d.js';
+
+// vertical band the terrain occupies: used to bound the picking march
+const TERRAIN_TOP = 1.75;
+const TERRAIN_BOTTOM = BASE_Y;
 
 // ---------------------------------------------------------------- hex → 3D
 export function hexTo3D(x, z) {
@@ -22,34 +27,83 @@ export function tileTo3D(tile) {
 }
 
 // ---------------------------------------------------------------- camera rig
+/**
+ * Northgard-style elevated RTS camera: a 3/4 perspective view that looks down at
+ * roughly 50° over the ground, orbits freely and can be tilted between ~35° and
+ * ~75°. Pan/zoom/orbit/tilt are eased so the camera glides instead of snapping
+ * (set `smooth: 0` to make it instantaneous — the pure maths tests do that).
+ */
 export function createCameraRig(overrides = {}) {
-  return {
-    target: { x: 0, z: 0 },
+  const rig = {
+    target: { x: 0, y: 0, z: 0 },
     distance: 26,
     yaw: Math.PI * 0.25,
-    pitch: 0.92,
+    pitch: 0.95,          // ~54° above the ground: classic RTS 3/4 view
     minDistance: 7,
     maxDistance: 72,
-    minPitch: 0.5,
-    maxPitch: 1.45,
+    minPitch: 0.62,       // never flat
+    maxPitch: 1.30,       // never a flat top-down board
+    fieldOfView: 52,
+    smooth: 0,            // >0 eases towards the requested pose
     ...overrides,
   };
+  // `now` is the pose actually rendered; the fields above are the requested one
+  rig.now = { x: rig.target.x, y: rig.target.y, z: rig.target.z, distance: rig.distance, yaw: rig.yaw, pitch: rig.pitch };
+  return rig;
 }
-export const CAM = createCameraRig({ distance: 26 });
+
+/** The app camera: eased movement, tuned for a smooth RTS feel. */
+export const CAM = createCameraRig({ distance: 26, smooth: 7.5 });
+
+/** Advance the eased pose towards the requested pose. Returns the rendered pose. */
+export function rigStep(rig, dt) {
+  const want = rig;
+  const now = rig.now;
+  if (!now) return want;
+  if (!rig.smooth) {
+    now.x = want.target.x; now.y = want.target.y; now.z = want.target.z;
+    now.distance = want.distance; now.yaw = want.yaw; now.pitch = want.pitch;
+    return now;
+  }
+  const k = 1 - Math.exp(-rig.smooth * Math.max(0, Math.min(dt, 0.25)));
+  now.x += (want.target.x - now.x) * k;
+  now.y += (want.target.y - now.y) * k;
+  now.z += (want.target.z - now.z) * k;
+  now.distance += (want.distance - now.distance) * k;
+  // shortest way around the circle
+  let dyaw = want.yaw - now.yaw;
+  while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+  while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+  now.yaw += dyaw * (k * 1.25);
+  now.pitch += (want.pitch - now.pitch) * k;
+  return now;
+}
+
+/** Ground height the camera is currently looking at. */
+export function rigGroundY(rig) {
+  if (rig.smooth && rig.now) return rig.now.y;
+  return rig.target.y || 0;
+}
 
 export function rigEye(rig) {
-  const cosP = Math.cos(rig.pitch);
+  const src = rig.smooth && rig.now ? rig.now : rig;
+  const pos = src === rig ? rig.target : rig.now;
+  const cosP = Math.cos(src.pitch);
   return {
-    x: rig.target.x + Math.sin(rig.yaw) * cosP * rig.distance,
-    y: Math.sin(rig.pitch) * rig.distance,
-    z: rig.target.z + Math.cos(rig.yaw) * cosP * rig.distance,
+    x: pos.x + Math.sin(src.yaw) * cosP * src.distance,
+    y: Math.sin(src.pitch) * src.distance,
+    z: pos.z + Math.cos(src.yaw) * cosP * src.distance,
   };
 }
 
 export function applyRig(rig, camera) {
   const eye = rigEye(rig);
+  const y = rigGroundY(rig);
+  const src = rig.smooth && rig.now ? rig.now : null;
+  const tx = src ? src.x : rig.target.x;
+  const tz = src ? src.z : rig.target.z;
   camera.position.set(eye.x, eye.y, eye.z);
-  camera.lookAt(rig.target.x, 0, rig.target.z);
+  camera.lookAt(tx, y, tz);
   camera.updateMatrixWorld();
 }
 
@@ -57,12 +111,18 @@ const _raycaster = new THREE.Raycaster();
 const _plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const _hit = new THREE.Vector3();
 
-/** Screen css pixels → point on the ground plane (y = 0). */
-export function screenToGround(rig, camera, sx, sy, width, height) {
+/**
+ * Screen css pixels → point on a horizontal ground plane. The plane sits at the
+ * height the camera is looking at by default, which is close enough for the
+ * picking refinement pass to converge in a step or two.
+ */
+export function screenToGround(rig, camera, sx, sy, width, height, planeY = null) {
   applyRig(rig, camera);
+  const y = planeY == null ? rigGroundY(rig) : planeY;
+  _plane.constant = -y;
   _raycaster.setFromCamera(new THREE.Vector2((sx / width) * 2 - 1, -(sy / height) * 2 + 1), camera);
   if (!_raycaster.ray.intersectPlane(_plane, _hit)) return null;
-  return { x: _hit.x, z: _hit.z };
+  return { x: _hit.x, y, z: _hit.z };
 }
 
 /** Ground point → screen css pixels. */
@@ -122,22 +182,69 @@ export function webglAvailable(canvas = null) {
 }
 
 /** Screen point → hex tile. Pure maths: usable in tests without WebGL. */
-export function pickTileFromScreen(state, rig, camera, sx, sy, width, height) {
-  const hit = screenToGround(rig, camera, sx, sy, width, height);
-  if (!hit) return null;
-  const r = Math.round(hit.z / 1.5);
-  const q = Math.round(hit.x / Math.sqrt(3) - r / 2);
+function tileAtGroundPoint(state, x, z) {
+  const r = Math.round(z / 1.5);
+  const q = Math.round(x / Math.sqrt(3) - r / 2);
   let best = null;
   let bestD = Infinity;
   for (let dq = -1; dq <= 1; dq++) {
     for (let dr = -1; dr <= 1; dr++) {
       const t = state.tileByKey.get(`${q + dq},${r + dr}`);
       if (!t) continue;
-      const d = (t.x - hit.x) ** 2 + (t.y - hit.z) ** 2;
+      const d = (t.x - x) ** 2 + (t.y - z) ** 2;
       if (d < bestD) { best = t; bestD = d; }
     }
   }
   return best;
+}
+
+/**
+ * Screen point → hex tile, on a map with real height. The ground is not flat any
+ * more, so the ray is re-intersected with the surface height of the tile it hits
+ * until it settles (2–3 passes; it converges immediately on even terrain).
+ */
+export function pickTileFromScreen(state, rig, camera, sx, sy, width, height) {
+  applyRig(rig, camera);
+  _raycaster.setFromCamera(new THREE.Vector2((sx / width) * 2 - 1, -(sy / height) * 2 + 1), camera);
+  const { origin, direction } = _raycaster.ray;
+  if (direction.y >= -1e-4) {
+    // looking level or up: fall back to the flat ground plane so the horizon
+    // still answers sensibly instead of picking nothing at all
+    const hit = screenToGround(rig, camera, sx, sy, width, height);
+    return hit ? tileAtGroundPoint(state, hit.x, hit.z) : null;
+  }
+  // The terrain is a height field now, so march the ray down through it and stop
+  // where it first goes under the surface. Restricting the march to the world's
+  // vertical band (cliffs are ~2.5 units tall) keeps it to a couple of dozen steps.
+  const tTop = Math.max(0, (origin.y - (TERRAIN_TOP + 0.1)) / -direction.y);
+  const tBottom = Math.max(tTop, (origin.y - (TERRAIN_BOTTOM - 0.1)) / -direction.y);
+  const steps = Math.min(160, Math.max(8, Math.ceil((tBottom - tTop) / 0.22)));
+  let prev = tTop;
+  for (let i = 1; i <= steps; i++) {
+    const t = tTop + ((tBottom - tTop) * i) / steps;
+    const x = origin.x + direction.x * t;
+    const y = origin.y + direction.y * t;
+    const z = origin.z + direction.z * t;
+    const tile = worldToTile(state, x, z);
+    const surface = tile ? tileElevation(tile) : 0;
+    if (!tile || y > surface) { prev = t; continue; }
+    // bisect between the last free sample and this one for a clean hit
+    let lo = prev;
+    let hi = t;
+    for (let k = 0; k < 5; k++) {
+      const mid = (lo + hi) / 2;
+      const mx = origin.x + direction.x * mid;
+      const my = origin.y + direction.y * mid;
+      const mz = origin.z + direction.z * mid;
+      const mt = worldToTile(state, mx, mz);
+      if (mt && my <= tileElevation(mt)) hi = mid;
+      else lo = mid;
+    }
+    const hx = origin.x + direction.x * hi;
+    const hz = origin.z + direction.z * hi;
+    return worldToTile(state, hx, hz) || tile;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------- renderer
@@ -161,8 +268,8 @@ export function createRenderer3D(canvas, opts = {}) {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(48, 1, 0.5, 400);
-  const rig = createCameraRig();
+  const camera = new THREE.PerspectiveCamera(CAM.fieldOfView, 1, 0.5, 400);
+  const rig = createCameraRig({ smooth: 7.5 });
 
   // --- sky dome, painted with a canvas gradient (original art)
   const skyCanvas = document.createElement('canvas');
@@ -200,8 +307,8 @@ export function createRenderer3D(canvas, opts = {}) {
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.camera.near = 1;
-  sun.shadow.camera.far = 120;
-  const SPAN = 15;
+  sun.shadow.camera.far = 140;
+  const SPAN = 17;   // shadow coverage while the camera pans
   sun.shadow.camera.left = -SPAN;
   sun.shadow.camera.right = SPAN;
   sun.shadow.camera.top = SPAN;
@@ -218,15 +325,18 @@ export function createRenderer3D(canvas, opts = {}) {
     territory: new THREE.Group(),
     buildings: new THREE.Group(),
     units: new THREE.Group(),
+    workers: new THREE.Group(),
     fx: new THREE.Group(),
   };
-  scene.add(layers.terrain, layers.decor, layers.territory, layers.buildings, layers.units, layers.fx);
+  scene.add(layers.terrain, layers.decor, layers.territory, layers.buildings,
+    layers.units, layers.workers, layers.fx);
 
   const maps = {
     tiles: new Map(),        // tileId → { slab, decor, base }
     territory: new Map(),    // tileId → ring
     buildings: new Map(),    // buildingId → { group, type, clan, built, flash }
     units: new Map(),        // unitId → { group, parts, hpBar, prev }
+    workers: new Map(),      // buildingId → { group, party: [{ group, parts, seed }], nodeId }
     highlights: new Map(),   // tileId → ring
     markers: new Map(),      // unitId → { line, dot }
     floaters: new Map(),     // floater → sprite
@@ -287,7 +397,7 @@ export function createRenderer3D(canvas, opts = {}) {
           color: clan.color, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false,
         }));
         const { x, z } = tileTo3D(tile);
-        ring.position.set(x, 0, z);
+        ring.position.set(x, tileElevation(tile) + 0.015, z);
         maps.territory.set(tile.id, ring);
         layers.territory.add(ring);
       }
@@ -314,7 +424,7 @@ export function createRenderer3D(canvas, opts = {}) {
           const clan = s.clans[b.clan];
           const group = buildBuildingMesh(b.type, clan.color, clan.banner, b.done);
           group.userData.buildingId = b.id;
-          group.position.set(x, TILE_HEIGHT, z);
+          group.position.set(x, tileElevation(tile), z);
           group.rotation.y = ((b.id * 37) % 9) * 0.13 - 0.55;
           layers.buildings.add(group);
           entry = { group, type: b.type, clan: b.clan, built: b.done ? 1 : 0, flash: 0 };
@@ -365,7 +475,7 @@ export function createRenderer3D(canvas, opts = {}) {
     return { group, fill };
   }
 
-  function syncUnits(s, ui) {
+  function syncUnits(s, ui, dt) {
     const seen = new Set();
     for (const u of s.units) {
       seen.add(u.id);
@@ -379,8 +489,12 @@ export function createRenderer3D(canvas, opts = {}) {
         entry = { group, type: u.type, clan: u.clan, parts: group.userData.parts, hpBar: null, prev: { x: u.x, y: u.y } };
         maps.units.set(u.id, entry);
       }
-      // unit world coordinates are already in the same 2D space as tiles
-      entry.group.position.set(u.x, TILE_HEIGHT, u.y);
+      // unit world coordinates are already in the same 2D space as tiles;
+      // the ground under them is not flat any more, so ease onto the local height
+      const groundY = elevationAt(s, u.x, u.y);
+      entry.group.position.x = u.x;
+      entry.group.position.z = u.y;
+      entry.group.position.y += (groundY - entry.group.position.y) * (1 - Math.exp(-14 * (dt || 0.016)));
       const dx = u.x - entry.prev.x;
       const dy = u.y - entry.prev.y;
       entry.prev.x = u.x;
@@ -449,7 +563,7 @@ export function createRenderer3D(canvas, opts = {}) {
         color, transparent: true, opacity: 0.75, side: THREE.DoubleSide, depthWrite: false,
       }));
       const { x, z } = tileTo3D(tile);
-      ring.position.set(x, 0, z);
+      ring.position.set(x, tileElevation(tile) + 0.02, z);
       maps.highlights.set(id, ring);
       layers.fx.add(ring);
     }
@@ -467,7 +581,7 @@ export function createRenderer3D(canvas, opts = {}) {
         layers.fx.add(hoverRing);
       }
       const { x, z } = tileTo3D(ui.hoverTile);
-      hoverRing.position.set(x, 0, z);
+      hoverRing.position.set(x, tileElevation(ui.hoverTile) + 0.02, z);
       hoverRing.visible = true;
     } else if (hoverRing) {
       hoverRing.visible = false;
@@ -566,10 +680,130 @@ export function createRenderer3D(canvas, opts = {}) {
         projectiles.push(mesh);
       }
       const k = 1 - p.life / p.max;
-      mesh.position.set(p.x + (p.tx - p.x) * k, 0.8 + Math.sin(k * Math.PI) * 0.35, p.y + (p.ty - p.y) * k);
+      const fx = p.x + (p.tx - p.x) * k;
+      const fz = p.y + (p.ty - p.y) * k;
+      mesh.position.set(fx, elevationAt(s, fx, fz) + 0.8 + Math.sin(k * Math.PI) * 0.35, fz);
       mesh.visible = true;
     }
     for (let i = s.projectiles.length; i < projectiles.length; i++) projectiles[i].visible = false;
+  }
+
+
+  // ---------------------------------------------------------------- work parties
+  // Villagers are simulated as a count inside each building, but the world should
+  // show them working: small 3D workers walk from their building to the resource
+  // node it exploits (forest, wildlife, lake, mine), harvest for a while and carry
+  // the load home. Presentation only — the engine stays authoritative.
+  const WORK_NODE = {
+    woodcutter: { terrain: ['forest', 'wildlife'], tool: 'axe' },
+    hunter: { terrain: ['wildlife', 'forest'], tool: 'bow' },
+    fishery: { terrain: ['lake'], tool: 'rod' },
+    mine: { terrain: ['mountain', 'iron'], tool: 'pick' },
+    ironmine: { terrain: ['iron'], tool: 'pick' },
+  };
+  const ONSITE_WORK = {
+    farm: 'sickle', brewery: 'sickle', forge: 'pick', market: 'rod',
+    tradingpost: 'rod', altar: 'rod', barracks: 'axe', townhall: 'axe', tower: 'axe',
+  };
+  const CYCLE = 11;   // seconds for one full work round trip
+
+  function findWorkNode(s, clan, tile, terrains) {
+    let best = null;
+    let bestScore = -1e9;
+    for (const t of s.tiles) {
+      if (!terrains.includes(t.terrain)) continue;
+      const d = Math.abs(t.q - tile.q) + Math.abs(t.q + t.r - tile.q - tile.r) + Math.abs(t.r - tile.r);
+      const score = (t.owner === clan ? 6 : t.owner == null ? 0 : -20) - d * 1.5
+        + (t.depositMax > 0 && t.deposit > 0 ? 3 : 0);
+      if (score > bestScore) { bestScore = score; best = t; }
+    }
+    return best;
+  }
+
+  function syncWorkers(s) {
+    const seen = new Set();
+    for (const tile of s.tiles) {
+      const { x, z } = tileTo3D(tile);
+      const groundY = tileElevation(tile);
+      for (const b of tile.buildings) {
+        if (!b.done || !(b.workers > 0)) continue;
+        const plan = WORK_NODE[b.type];
+        const onSite = ONSITE_WORK[b.type];
+        if (!plan && !onSite) continue;
+        seen.add(b.id);
+        const clan = s.clans[b.clan];
+        const tool = plan ? plan.tool : onSite;
+        const count = Math.min(b.workers, 3);
+        let entry = maps.workers.get(b.id);
+        if (!entry || entry.count !== count || entry.tool !== tool) {
+          if (entry) { layers.workers.remove(entry.group); disposeGroup(entry.group); }
+          const group = new THREE.Group();
+          group.userData.buildingId = b.id;
+          const party = [];
+          for (let i = 0; i < count; i++) {
+            const w = buildVillagerMesh(clan.color, clan.banner, tool);
+            const load = w.getObjectByName('load');
+            group.add(w);
+            party.push({ group: w, parts: w.userData.parts, load, seed: (b.id * 7.31 + i * 2.77) % 100 });
+          }
+          entry = { group, party, count, tool, nodeId: null, node: null, retarget: 0 };
+          layers.workers.add(group);
+          maps.workers.set(b.id, entry);
+        }
+        // pick the resource node this building works from (refreshed rarely)
+        entry.retarget -= 1;
+        if (plan && (entry.retarget <= 0 || !entry.node || entry.node.terrain !== undefined && entry.node.depositMax > 0 && entry.node.deposit <= 0)) {
+          const node = findWorkNode(s, b.clan, tile, plan.terrain);
+          entry.node = node;
+          entry.retarget = 120;   // ~2 s at 60 fps
+        }
+        entry.group.userData.nodeId = entry.node ? entry.node.id : null;
+        const nodeX = entry.node ? entry.node.x : x;
+        const nodeZ = entry.node ? entry.node.y : z;
+        const nodeY = entry.node ? tileElevation(entry.node) : groundY;
+        for (let i = 0; i < entry.party.length; i++) {
+          const w = entry.party[i];
+          const phase = (((time + w.seed) % CYCLE) + CYCLE) % CYCLE / CYCLE;
+          const side = (i - (entry.party.length - 1) / 2) * 0.34;
+          // 0-0.34 walk out · 0.34-0.58 work · 0.58-0.9 walk home · 0.9-1 rest
+          let t = 0;
+          let working = false;
+          let carrying = false;
+          if (phase < 0.34) t = phase / 0.34;
+          else if (phase < 0.58) { t = 1; working = true; }
+          else if (phase < 0.9) { t = 1 - (phase - 0.58) / 0.32; carrying = true; }
+          else { t = 0; }
+          const px = x + (nodeX - x) * t + side * 0.18;
+          const pz = z + (nodeZ - z) * t + side * 0.18;
+          const py = groundY + (nodeY - groundY) * t;
+          w.group.position.set(px, py, pz);
+          const heading = Math.atan2(nodeX - x, nodeZ - z) + (t < 0.5 && phase >= 0.58 ? Math.PI : 0);
+          w.group.rotation.y = heading;
+          const parts = w.parts;
+          const walking = !working;
+          const bob = Math.sin(time * 9 + w.seed);
+          parts.body.position.y = walking ? Math.abs(bob) * 0.05 : 0;
+          parts.armL.rotation.x = walking ? bob * 0.5 : -0.3;
+          parts.armR.rotation.x = walking ? -bob * 0.5 : 0;
+          if (working) {
+            // chopping / digging / reaping beat
+            const beat = Math.sin(time * 7 + w.seed) * 0.9;
+            parts.weapon.rotation.x = -0.9 + beat * 0.55;
+            parts.body.rotation.x = beat * 0.08;
+          } else {
+            parts.weapon.rotation.x *= 0.7;
+            parts.body.rotation.x = 0;
+          }
+          if (w.load) w.load.visible = carrying;
+        }
+      }
+    }
+    for (const [id, entry] of maps.workers) {
+      if (seen.has(id)) continue;
+      layers.workers.remove(entry.group);
+      disposeGroup(entry.group);
+      maps.workers.delete(id);
+    }
   }
 
   // ---------------------------------------------------------------- seasons
@@ -618,19 +852,25 @@ export function createRenderer3D(canvas, opts = {}) {
     if (!built || state !== s) { state = s; buildWorld(s); }
     time += dt;
     size();
+    // the camera looks at the ground under its target, and eases towards the
+    // pose the player asked for
+    rig.target.y = elevationAt(s, rig.target.x, rig.target.z);
+    rigStep(rig, dt);
+    const focus = rig.smooth && rig.now ? rig.now : rig.target;
     syncSeason(s);
     syncTerritory(s);
     syncBuildings(s);
-    syncUnits(s, ui);
+    syncUnits(s, ui, dt);
+    syncWorkers(s);
     syncHighlights(s, ui);
     syncMarkers(s, ui);
     syncEffects(s);
 
     // keep the shadow camera on the action
-    sun.position.set(rig.target.x + 15, 26, rig.target.z + 11);
-    sun.target.position.set(rig.target.x, 0, rig.target.z);
+    sun.position.set(focus.x + 15, 30, focus.z + 11);
+    sun.target.position.set(focus.x, focus.y, focus.z);
     sun.target.updateMatrixWorld();
-    sky.position.set(rig.target.x, 0, rig.target.z);
+    sky.position.set(focus.x, focus.y, focus.z);
     applyRig(rig, camera);
     renderer.render(scene, camera);
   }

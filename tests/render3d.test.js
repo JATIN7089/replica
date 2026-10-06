@@ -8,10 +8,11 @@ import { BUILDINGS, TERRAIN } from '../src/data.js';
 import {
   buildTileMesh, buildDecorations, buildBuildingMesh, buildUnitMesh,
   hexPrismGeometry, hexRingGeometry,
+  buildVillagerMesh, workToolFor, tileElevation, elevationAt, worldToTile, WATER_LEVEL, BASE_Y,
 } from '../src/models3d.js';
 import {
-  createCameraRig, applyRig, rigEye, screenToGround, groundToScreen,
-  pickTileFromScreen, webglAvailable, tileTo3D, hexTo3D,
+  createCameraRig, applyRig, rigEye, rigStep, rigGroundY, screenToGround, groundToScreen,
+  pickTileFromScreen, webglAvailable, tileTo3D, hexTo3D, CAM,
 } from '../src/render3d.js';
 
 let pass = 0, fail = 0;
@@ -59,7 +60,8 @@ section('Tile meshes & decorations');
     const meshes = countMeshes(mesh);
     ok(meshes >= 1, `tile mesh for ${kind}`, meshes);
     const top = mesh.userData.terrainTop;
-    ok(top > 0, `${kind} slab has height`, top);
+    if (kind === 'lake') ok(top < WATER_LEVEL, 'lake beds sit below the water line', top.toFixed(2));
+    else ok(top > 0, `${kind} slab has height`, top);
     const decor = buildDecorations(tile);
     const decorMeshes = countMeshes(decor);
     if (kind === 'lake') ok(true, 'lake decorations (reeds) optional');
@@ -156,14 +158,18 @@ section('Tile picking (the mouse)');
 {
   const state = E.createGame({ clanId: 'wolf', difficulty: 'normal', mapSeed: 11 });
   const cam = new THREE.PerspectiveCamera(48, 16 / 9, 0.5, 400);
-  let hits = 0, tries = 0;
+  let hits = 0, tries = 0, hidden = 0;
   for (const yaw of [0, 1.1, 2.4, 3.9, 5.2]) {
     for (const distance of [18, 34, 60]) {
       const rig = createCameraRig({ target: { x: 0, z: 0 }, distance, yaw, pitch: 0.95 });
       applyRig(rig, cam);
       for (const tile of state.tiles) {
-        const p = groundToScreen(rig, cam, tile.x, tile.y, 1280, 720, 0.1);
+        const py = tileElevation(tile) + 0.03;
+        const p = groundToScreen(rig, cam, tile.x, tile.y, 1280, 720, py);
         if (p.behind || p.x < 0 || p.y < 0 || p.x > 1280 || p.y > 720) continue;
+        // a tile centre tucked behind a taller neighbour is genuinely hidden —
+        // the mouse correctly picks the cliff in front of it, so skip those
+        if (!centreIsVisible(state, rig, cam, tile, py)) { hidden++; continue; }
         const picked = pickTileFromScreen(state, rig, cam, p.x, p.y, 1280, 720);
         tries++;
         if (picked && picked.id === tile.id) hits++;
@@ -172,8 +178,25 @@ section('Tile picking (the mouse)');
   }
   ok(tries > 300, 'the test actually sampled many tiles', tries);
   ok(hits === tries, 'every visible tile centre picks that tile', `${hits}/${tries}`);
+  ok(hidden > 0, 'some tile centres are hidden behind cliffs (the map has real relief)', hidden);
   const off = pickTileFromScreen(state, rig0(state), cam0(), -5000, -5000, 1280, 720);
   ok(off === null || state.tileById.has(off.id), 'picks outside the map never return phantom tiles');
+}
+
+
+/** March the sight line from the camera to a point and report whether terrain blocks it. */
+function centreIsVisible(state, rig, cam, tile, y) {
+  const eye = rigEye(rig);
+  const steps = 400;
+  for (let i = 1; i < steps; i++) {
+    const k = i / steps;
+    const x = eye.x + (tile.x - eye.x) * k;
+    const yy = eye.y + (y - eye.y) * k;
+    const z = eye.z + (tile.y - eye.z) * k;
+    const t = worldToTile(state, x, z);
+    if (t && yy < tileElevation(t)) return false;
+  }
+  return true;
 }
 
 function rig0(state) {

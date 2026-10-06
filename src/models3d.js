@@ -127,6 +127,88 @@ function gableRoof(width, depth, height, material, x = 0, y = 0, z = 0, overhang
 }
 
 // ---------------------------------------------------------------- terrain
+// ---------------------------------------------------------------- terrain height
+// The simulation is flat (2D axial hexes); the world is not. Every tile gets a
+// deterministic elevation so the board reads as rolling hills, lake basins and
+// mountain ridges instead of a flat table of counters.
+
+/** Bottom of every tile column: deep enough that steps between tiles never show a gap. */
+export const BASE_Y = -0.95;
+/** Global water surface. Lake tiles sink below it. */
+export const WATER_LEVEL = 0.07;
+
+function hash01(x, y) {
+  const v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+  return v - Math.floor(v);
+}
+
+/** Smooth (value noise) field: hills stay a few tiles wide instead of per-tile noise. */
+function smoothNoise(x, y, cell) {
+  const fx = x / cell;
+  const fy = y / cell;
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const tx = fx - x0;
+  const ty = fy - y0;
+  const sx = tx * tx * (3 - 2 * tx);
+  const sy = ty * ty * (3 - 2 * ty);
+  const n00 = hash01(x0, y0);
+  const n10 = hash01(x0 + 1, y0);
+  const n01 = hash01(x0, y0 + 1);
+  const n11 = hash01(x0 + 1, y0 + 1);
+  return (n00 * (1 - sx) + n10 * sx) * (1 - sy) + (n01 * (1 - sx) + n11 * sx) * sy;
+}
+
+/**
+ * Height of a tile's top surface, in world units. Pure and deterministic, so the
+ * renderer, the picking maths and the tests all agree on where the ground is.
+ */
+export function tileElevation(tile) {
+  if (tile.terrain === 'lake') return WATER_LEVEL - 0.44 + smoothNoise(tile.q + 31, tile.r - 12, 3.5) * 0.12;
+  if (tile.terrain === 'mountain' || tile.terrain === 'iron') {
+    return 1.02 + smoothNoise(tile.q + 40, tile.r - 17, 4.5) * 0.55;
+  }
+  const broad = smoothNoise(tile.q + 7, tile.r + 3, 3.4);
+  const detail = smoothNoise(tile.q * 2 - 5, tile.r * 2 + 11, 1.9);
+  const roll = broad * 0.72 + detail * 0.28;
+  return 0.17 + roll * 0.40;
+}
+
+/** Key format mirrors the engine's hex lookup so state.tileByKey can be read directly. */
+const tileKey = (q, r) => q + ',' + r;
+function hexRoundCoord(q, r) {
+  const s = -q - r;
+  let rq = Math.round(q);
+  let rr = Math.round(r);
+  const rs = Math.round(s);
+  const dq = Math.abs(rq - q);
+  const dr = Math.abs(rr - r);
+  const ds = Math.abs(rs - s);
+  if (dq > dr && dq > ds) rq = -rr - rs;
+  else if (dr > ds) rr = -rq - rs;
+  return { q: rq, r: rr };
+}
+
+/** Tile under a world position (mirrors engine.worldToHex, size 1). */
+export function worldToTile(state, x, z) {
+  const q = (Math.sqrt(3) / 3) * x - z / 3;
+  const r = (2 / 3) * z;
+  const { q: rq, r: rr } = hexRoundCoord(q, r);
+  return state.tileByKey.get(tileKey(rq, rr)) || null;
+}
+
+/** Ground height under an arbitrary world position (for units, effects, markers). */
+export function elevationAt(state, x, z) {
+  const tile = worldToTile(state, x, z);
+  return tile ? tileElevation(tile) : WATER_LEVEL;
+}
+
+/** Ground height of a tile by id. */
+export function elevationOf(state, tileId) {
+  const tile = state.tileById.get(tileId);
+  return tile ? tileElevation(tile) : WATER_LEVEL;
+}
+
 export function buildTileMesh(tile) {
   const group = new THREE.Group();
   group.name = `tile-${tile.id}`;
@@ -151,33 +233,37 @@ export function buildTileMesh(tile) {
   const slabMat = new THREE.MeshStandardMaterial({
     color: base, roughness: isWater ? 0.5 : 0.95, flatShading: true,
   });
-  const height = isPeak ? MOUNTAIN_HEIGHT : isWater ? TILE_HEIGHT * 0.7 : TILE_HEIGHT;
-  const slab = new THREE.Mesh(hexPrismGeometry(HEX_RADIUS * 0.99, height, isPeak ? 0.55 : 1), slabMat);
+  // each column is extruded from a common floor up to its own elevation, so the
+  // map has real height: rolling ground, sunken lake basins, tall rocky ridges
+  const top = tileElevation(tile);
+  const slab = new THREE.Mesh(hexPrismGeometry(HEX_RADIUS * 1.002, top - BASE_Y, isPeak ? 0.55 : 1), slabMat);
+  slab.position.y = BASE_Y;
   slab.receiveShadow = true;
+  slab.castShadow = isPeak;
   slab.name = 'slab';
   group.add(slab);
 
   if (isWater) {
-    const water = new THREE.Mesh(hexPrismGeometry(HEX_RADIUS * 0.92, 0.06, 1), MAT.water());
-    water.position.y = height + 0.02;
+    const water = new THREE.Mesh(hexPrismGeometry(HEX_RADIUS * 0.995, 0.05, 1), MAT.water());
+    water.position.y = WATER_LEVEL;
     water.name = 'water';
     group.add(water);
   }
   if (isPeak) {
     const peakMat = kind === 'iron' ? MAT.ironOre() : MAT.stone();
-    const peak = cone(0.42, 0.62, peakMat, 0, height + 0.24, 0);
+    const peak = cone(0.42, 0.62, peakMat, 0, top + 0.24, 0);
     peak.rotation.y = variance * Math.PI;
     peak.castShadow = true;
     group.add(peak);
-    const snowCap = cone(0.2, 0.26, MAT.snow(), 0, height + 0.45, 0);
+    const snowCap = cone(0.2, 0.26, MAT.snow(), 0, top + 0.45, 0);
     snowCap.rotation.y = variance * Math.PI;
     group.add(snowCap);
   }
-  group.userData.terrainTop = height;
+  group.userData.terrainTop = top;
   return group;
 }
 
-export function buildDecorations(tile) {
+export function buildDecorations(tile, top = tileElevation(tile)) {
   const group = new THREE.Group();
   const r = (n) => {
     const v = Math.sin(tile.id * 12.9898 + n * 78.233) * 43758.5453;
@@ -190,7 +276,7 @@ export function buildDecorations(tile) {
         const a = r(i + 2) * Math.PI * 2;
         const d = 0.15 + r(i + 9) * 0.5;
         const scale = 0.75 + r(i + 5) * 0.5;
-        group.add(tree(scale, r(i + 3), TILE_HEIGHT, Math.cos(a) * d, Math.sin(a) * d));
+        group.add(tree(scale, r(i + 3), top, Math.cos(a) * d, Math.sin(a) * d));
       }
       break;
     }
@@ -202,7 +288,7 @@ export function buildDecorations(tile) {
         const a = r(i + 4) * Math.PI * 2;
         const d = 0.2 + r(i + 7) * 0.55;
         const tuft = cone(0.045, tile.terrain === 'fertile' ? 0.2 : 0.14, MAT.leaf(0.08 - r(i) * 0.16),
-          Math.cos(a) * d, TILE_HEIGHT + 0.05, Math.sin(a) * d, 4);
+          Math.cos(a) * d, top + 0.05, Math.sin(a) * d, 4);
         group.add(tuft);
       }
       if (tile.terrain === 'wildlife' && tile.wild > 0) {
@@ -215,12 +301,12 @@ export function buildDecorations(tile) {
         const a = (i / 3) * Math.PI * 2 + r(i) * 0.6;
         const d = 0.42;
         const h = 0.35 + r(i + 3) * 0.35;
-        const pillar = box(0.14, h, 0.14, MAT.stone(), Math.cos(a) * d, TILE_HEIGHT + h / 2, Math.sin(a) * d);
+        const pillar = box(0.14, h, 0.14, MAT.stone(), Math.cos(a) * d, top + h / 2, Math.sin(a) * d);
         pillar.rotation.y = r(i + 8) * 0.5;
         pillar.castShadow = true;
         group.add(pillar);
       }
-      const lintel = box(0.5, 0.1, 0.14, MAT.stone(), 0, TILE_HEIGHT + 0.55, -0.42);
+      const lintel = box(0.5, 0.1, 0.14, MAT.stone(), 0, top + 0.55, -0.42);
       group.add(lintel);
       break;
     }
@@ -511,6 +597,80 @@ const UNIT_STYLE = {
   scout: { weapon: 'bow', shield: false, helmet: 'hood' },
   warchief: { weapon: 'sword', shield: true, helmet: 'horned', hero: true },
 };
+
+/**
+ * A worker: the clan's villagers, as 3D bodies with the tool of their trade.
+ * Work parties walk from their building to a resource node and back, so resource
+ * gathering is visible in the world instead of being an abstract number.
+ */
+const WORK_TOOLS = {
+  wood: 'axe', stone: 'pick', iron: 'pick', food: 'sickle', fish: 'rod', lore: 'rod',
+};
+export function workToolFor(res, type) {
+  if (type === 'farm' || type === 'brewery') return 'sickle';
+  if (type === 'woodcutter') return 'axe';
+  if (type === 'hunter') return 'bow';
+  if (type === 'mine' || type === 'ironmine') return 'pick';
+  if (type === 'fishery') return 'rod';
+  return WORK_TOOLS[res] || 'axe';
+}
+
+export function buildVillagerMesh(clanColor = '#c9b184', bannerColor = '#f0b757', tool = 'axe') {
+  const g = new THREE.Group();
+  const tunic = MAT.cloth(clanColor);
+  const trim = MAT.cloth(bannerColor);
+  const body = new THREE.Group();
+  body.name = 'body';
+  const torso = cyl(0.105, 0.13, 0.26, tunic, 0, 0.33, 0, 6);
+  torso.castShadow = true;
+  body.add(torso);
+  body.add(cyl(0.125, 0.125, 0.045, trim, 0, 0.21, 0, 6));      // belt
+  const head = sph(0.09, MAT.skin(), 0, 0.5, 0, 6);
+  head.name = 'head';
+  head.castShadow = true;
+  body.add(head);
+  body.add(sph(0.1, trim, 0, 0.54, 0, 6));                        // cap
+  const armL = cyl(0.032, 0.032, 0.2, tunic, -0.13, 0.34, 0, 5);
+  const armR = cyl(0.032, 0.032, 0.2, tunic, 0.13, 0.34, 0, 5);
+  armL.name = 'armL';
+  armR.name = 'armR';
+  body.add(armL, armR);
+  for (const side of [-1, 1]) {
+    const leg = cyl(0.038, 0.034, 0.2, MAT.cloth('#4b3a2a'), side * 0.055, 0.1, 0, 5);
+    leg.name = side < 0 ? 'legL' : 'legR';
+    body.add(leg);
+  }
+  const weapon = new THREE.Group();
+  weapon.name = 'weapon';
+  if (tool === 'axe') {
+    weapon.add(cyl(0.012, 0.014, 0.26, MAT.wood(), 0, 0.06, 0, 5));
+    weapon.add(box(0.07, 0.1, 0.018, MAT.metal(), 0.045, 0.17, 0));
+  } else if (tool === 'pick') {
+    weapon.add(cyl(0.012, 0.014, 0.28, MAT.wood(), 0, 0.06, 0, 5));
+    weapon.add(box(0.16, 0.03, 0.02, MAT.metal(), 0, 0.2, 0));
+  } else if (tool === 'sickle') {
+    weapon.add(cyl(0.011, 0.013, 0.16, MAT.wood(), 0, 0.04, 0, 5));
+    weapon.add(box(0.09, 0.025, 0.016, MAT.metal(), 0.045, 0.12, 0));
+  } else if (tool === 'bow') {
+    const bow = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.01, 4, 8, Math.PI * 1.1), MAT.wood());
+    bow.rotation.y = Math.PI / 2;
+    weapon.add(bow);
+  } else {
+    weapon.add(cyl(0.008, 0.01, 0.34, MAT.wood(), 0, 0.12, 0, 4));
+  }
+  weapon.position.set(0.17, 0.34, 0.02);
+  weapon.rotation.z = tool === 'pick' ? -0.35 : -0.2;
+  body.add(weapon);
+  // the load a worker carries home from the resource node (hidden until it does)
+  const load = box(0.14, 0.12, 0.1, tool === 'pick' ? MAT.stone() : MAT.wood(), 0, 0.42, -0.16);
+  load.name = 'load';
+  load.visible = false;
+  body.add(load);
+  g.add(body);
+  g.userData.parts = { body, head, armL, armR, weapon };
+  g.userData.style = { tool, worker: true };
+  return g;
+}
 
 /** Low-poly Viking. Returns a group with named parts for animation. */
 export function buildUnitMesh(type, clanColor = '#e09a3a', bannerColor = '#f0b757') {
