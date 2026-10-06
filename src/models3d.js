@@ -6,36 +6,31 @@
 import * as THREE from '../vendor/three.module.min.js';
 
 export const HEX_RADIUS = 1;          // world units, matches the engine's hex size
-export const TILE_HEIGHT = 0.16;      // default tile slab thickness
+export const TILE_HEIGHT = 0.16;      // slight clearance for small creatures; there are no world slabs
 export const MOUNTAIN_HEIGHT = 0.85;
 
 // ---------------------------------------------------------------- primitives
 const DUMMY = new THREE.Object3D();
 
-export function hexCornersXZ(radius) {
-  const pts = [];
-  for (let i = 0; i < 6; i++) {
-    const a = (Math.PI / 180) * (60 * i - 30);
-    pts.push([radius * Math.cos(a), radius * Math.sin(a)]);
-  }
-  return pts;
-}
-
-/** Flat-topped hexagonal prism sitting on y = 0 (bottom) up to y = height. */
-
-/** Flat hexagonal ring used for territory borders and selection highlights. */
-export function hexRingGeometry(inner, outer, y = 0) {
-  const a = hexCornersXZ(inner);
-  const b = hexCornersXZ(outer);
+/** Circular, world-facing marker geometry (for units, never a tile outline). */
+export function circularRingGeometry(inner, outer, y = 0, segments = 32) {
   const verts = [];
-  const push = (p) => verts.push(p[0], y, p[1]);
-  for (let i = 0; i < 6; i++) {
-    const j = (i + 1) % 6;
-    push(a[i]); push(b[i]); push(b[j]);
-    push(a[i]); push(b[j]); push(a[j]);
+  const indices = [];
+  for (let i = 0; i < segments; i++) {
+    const a0 = (i / segments) * Math.PI * 2;
+    const a1 = ((i + 1) / segments) * Math.PI * 2;
+    const p0 = [Math.cos(a0), Math.sin(a0)];
+    const p1 = [Math.cos(a1), Math.sin(a1)];
+    const start = verts.length / 3;
+    verts.push(p0[0] * inner, y, p0[1] * inner);
+    verts.push(p0[0] * outer, y, p0[1] * outer);
+    verts.push(p1[0] * outer, y, p1[1] * outer);
+    verts.push(p1[0] * inner, y, p1[1] * inner);
+    indices.push(start, start + 2, start + 1, start, start + 3, start + 2);
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setIndex(indices);
   geo.computeVertexNormals();
   return geo;
 }
@@ -102,7 +97,7 @@ function gableRoof(width, depth, height, material, x = 0, y = 0, z = 0, overhang
 }
 
 // ---------------------------------------------------------------- terrain
-Object.assign(prim, { box, cyl, cone, sph, gableRoof, hexCornersXZ });
+Object.assign(prim, { box, cyl, cone, sph, gableRoof });
 
 /** Merge a Group's meshes into one geometry (used for instanced scatter props). */
 export const mergeMesh = (group) => mergeMeshes(
@@ -427,11 +422,11 @@ function chopBlock(darkWood, x, y, z) {
 
 // ---------------------------------------------------------------- units
 const UNIT_STYLE = {
-  warrior: { weapon: 'sword', shield: true, helmet: 'round' },
-  axe: { weapon: 'axe', shield: false, helmet: 'round' },
-  shield: { weapon: 'spear', shield: true, bigShield: true, helmet: 'nasal' },
-  scout: { weapon: 'bow', shield: false, helmet: 'hood' },
-  warchief: { weapon: 'sword', shield: true, helmet: 'horned', hero: true },
+  warrior: { role: 'swordsman', weapon: 'sword', shield: 'round', helmet: 'nasal', armor: 'mail', scale: 1 },
+  axe: { role: 'raider', weapon: 'axe', shield: null, helmet: 'leather', armor: 'fur', scale: 1.03 },
+  shield: { role: 'shield-bearer', weapon: 'spear', shield: 'tower', helmet: 'closed', armor: 'plate', scale: 1.04 },
+  scout: { role: 'scout', weapon: 'bow', shield: null, helmet: 'hood', armor: 'leather', scale: 0.94 },
+  warchief: { role: 'warchief', weapon: 'sword', shield: 'round', helmet: 'horned', armor: 'hero', scale: 1.2, hero: true },
 };
 
 /**
@@ -508,105 +503,174 @@ export function buildVillagerMesh(clanColor = '#c9b184', bannerColor = '#f0b757'
   return g;
 }
 
-/** Low-poly Viking. Returns a group with named parts for animation. */
+/**
+ * Phase 6 characters: articulated low-poly figures with a silhouette, weapon,
+ * armour and headgear per unit role. Named pivots are animated by render3d.js.
+ */
 export function buildUnitMesh(type, clanColor = '#e09a3a', bannerColor = '#f0b757') {
   const style = UNIT_STYLE[type] || UNIT_STYLE.warrior;
   const g = new THREE.Group();
+  const body = new THREE.Group();
+  body.name = 'body';
+  g.add(body);
+
   const tunic = MAT.cloth(clanColor);
   const trim = MAT.cloth(bannerColor);
   const metal = MAT.metal();
-  const scale = style.hero ? 1.18 : 1;
+  const mail = MAT.cloth(style.armor === 'leather' ? '#594431' : style.armor === 'fur' ? '#614638' : '#737c84');
+  const trousers = MAT.cloth(style.armor === 'hero' ? '#473c39' : '#4b3a2a');
+  const skin = MAT.skin();
+  const boot = MAT.darkWood();
 
-  const body = new THREE.Group();
-  body.name = 'body';
-  const torso = body.add ? null : null;
-  const torsoMesh = cyl(0.13, 0.16, 0.3, tunic, 0, 0.34, 0, 7);
+  // A flared tunic and tabard make the torso read at game-camera scale.
+  const skirt = cone(style.role === 'scout' ? 0.14 : 0.17, 0.23, tunic, 0, 0.24, 0, 7);
+  skirt.rotation.x = Math.PI;
+  body.add(skirt);
+  const torsoMesh = cyl(style.armor === 'plate' ? 0.145 : 0.12,
+    style.armor === 'plate' ? 0.17 : 0.15, 0.28, tunic, 0, 0.39, 0, 7);
   torsoMesh.castShadow = true;
   body.add(torsoMesh);
-  body.add(cyl(0.155, 0.155, 0.05, trim, 0, 0.2, 0, 7));           // belt
-  const head = sph(0.105, MAT.skin(), 0, 0.55, 0, 7);
+  body.add(cyl(0.16, 0.16, 0.045, trim, 0, 0.23, 0, 8));
+  body.add(box(0.075, 0.18, 0.025, trim, 0, 0.37, 0.157));
+  body.add(box(0.11, 0.035, 0.025, MAT.darkWood(), 0, 0.235, 0.17));
+
+  if (style.armor === 'mail' || style.armor === 'plate' || style.armor === 'hero') {
+    const chest = box(style.armor === 'hero' ? 0.23 : 0.2, 0.18, 0.04, mail, 0, 0.4, 0.14);
+    chest.castShadow = true;
+    body.add(chest);
+    for (const side of [-1, 1]) {
+      body.add(sph(style.armor === 'hero' ? 0.09 : 0.075, style.armor === 'hero' ? trim : metal,
+        side * 0.155, 0.47, 0, 6));
+    }
+  } else if (style.armor === 'fur') {
+    for (const side of [-1, 1]) body.add(sph(0.09, MAT.cloth('#90714d'), side * 0.15, 0.47, -0.015, 6));
+  }
+
+  // Separate leg pivots (not painted-on cylinders) for a readable walk cycle.
+  const legL = new THREE.Group();
+  const legR = new THREE.Group();
+  legL.name = 'legL'; legR.name = 'legR';
+  for (const [leg, side] of [[legL, -1], [legR, 1]]) {
+    leg.position.set(side * 0.075, 0.205, 0);
+    leg.add(cyl(0.052, 0.044, 0.19, trousers, 0, -0.075, 0, 6));
+    leg.add(box(0.09, 0.065, 0.145, boot, 0, -0.165, 0.035));
+    body.add(leg);
+  }
+
+  const armL = new THREE.Group();
+  const armR = new THREE.Group();
+  armL.name = 'armL'; armR.name = 'armR';
+  armL.position.set(-0.17, 0.46, 0);
+  armR.position.set(0.17, 0.46, 0);
+  for (const arm of [armL, armR]) {
+    arm.add(cyl(0.047, 0.04, 0.21, tunic, 0, -0.075, 0, 6));
+    arm.add(sph(0.035, skin, 0, -0.17, 0.01, 6));
+    body.add(arm);
+  }
+
+  // Role-specific headgear and chest markers give the five units distinct reads.
+  const head = sph(0.098, skin, 0, 0.65, 0.015, 7);
   head.name = 'head';
   head.castShadow = true;
   body.add(head);
-  // helmet
-  if (style.helmet === 'horned') {
-    body.add(sph(0.12, metal, 0, 0.58, 0, 7));
-    for (const s of [-1, 1]) {
-      const horn = cone(0.035, 0.16, MAT.cloth('#f2e2c0'), s * 0.11, 0.66, 0, 5);
-      horn.rotation.z = s * 0.7;
+  if (style.helmet === 'hood') {
+    const hood = sph(0.125, MAT.cloth('#455548'), 0, 0.68, -0.012, 7);
+    hood.scale.set(1, 1.08, 1.02);
+    body.add(hood);
+    body.add(box(0.13, 0.045, 0.045, MAT.cloth('#39483b'), 0, 0.61, 0.075));
+  } else if (style.helmet === 'horned') {
+    body.add(sph(0.12, metal, 0, 0.69, 0, 7));
+    body.add(box(0.22, 0.045, 0.14, trim, 0, 0.66, 0));
+    for (const side of [-1, 1]) {
+      const horn = cone(0.038, 0.2, MAT.cloth('#e8d5b0'), side * 0.115, 0.76, -0.005, 5);
+      horn.rotation.z = side * 0.62;
       body.add(horn);
     }
+  } else if (style.helmet === 'closed') {
+    body.add(sph(0.12, metal, 0, 0.69, 0, 7));
+    body.add(box(0.12, 0.055, 0.035, metal, 0, 0.64, 0.095));
+    body.add(box(0.024, 0.13, 0.025, trim, 0, 0.62, 0.11));
   } else if (style.helmet === 'nasal') {
-    body.add(sph(0.115, metal, 0, 0.57, 0, 7));
-    body.add(box(0.02, 0.07, 0.02, metal, 0, 0.53, 0.1));
-  } else if (style.helmet === 'hood') {
-    body.add(sph(0.125, MAT.cloth('#4c5a4a'), 0, 0.57, 0, 7));
+    body.add(sph(0.115, metal, 0, 0.69, 0, 7));
+    body.add(box(0.025, 0.11, 0.025, trim, 0, 0.64, 0.103));
+    body.add(box(0.19, 0.035, 0.13, trim, 0, 0.65, 0));
   } else {
-    body.add(sph(0.115, metal, 0, 0.58, 0, 7));
+    body.add(sph(0.112, MAT.cloth('#6b5138'), 0, 0.69, 0, 7));
+    body.add(box(0.18, 0.035, 0.13, trim, 0, 0.65, 0));
   }
-  // arms
-  const armL = cyl(0.045, 0.045, 0.24, tunic, -0.17, 0.36, 0, 6);
-  const armR = cyl(0.045, 0.045, 0.24, tunic, 0.17, 0.36, 0, 6);
-  armL.name = 'armL';
-  armR.name = 'armR';
-  body.add(armL, armR);
-  // legs
-  for (const s of [-1, 1]) {
-    const leg = cyl(0.05, 0.045, 0.22, MAT.cloth('#4b3a2a'), s * 0.07, 0.11, 0, 6);
-    leg.name = s < 0 ? 'legL' : 'legR';
-    body.add(leg);
+
+  // The off-hand carries a full layered shield, mounted on its own pivot.
+  let shield = null;
+  if (style.shield) {
+    shield = new THREE.Group();
+    shield.name = 'shield';
+    shield.position.set(0, -0.13, 0.055);
+    if (style.shield === 'tower') shield.scale.set(1.04, 1.27, 1);
+    const rad = style.shield === 'tower' ? 0.155 : 0.135;
+    const woodFace = new THREE.Mesh(new THREE.CircleGeometry(rad, 12), MAT.darkWood());
+    const paintedFace = new THREE.Mesh(new THREE.CircleGeometry(rad * 0.82, 12), tunic);
+    const boss = sph(0.036, metal, 0, 0, 0.03, 7);
+    const emblem = box(0.055, 0.075, 0.018, trim, 0, 0, 0.028);
+    woodFace.position.z = 0.012;
+    paintedFace.position.z = 0.02;
+    shield.add(woodFace, paintedFace, boss, emblem);
+    armL.add(shield);
   }
-  // weapon
+
+  // A back mantle is reserved for the commander; the scout gets a quiver.
+  let cape = null;
+  if (style.hero) {
+    cape = box(0.22, 0.35, 0.045, MAT.cloth('#7d3028'), 0, 0.36, -0.14);
+    cape.name = 'cape';
+    body.add(cape);
+    body.add(box(0.13, 0.045, 0.025, trim, 0, 0.49, -0.17));
+  } else if (style.role === 'scout') {
+    const quiver = cyl(0.045, 0.055, 0.22, MAT.darkWood(), -0.12, 0.42, -0.13, 6);
+    quiver.rotation.z = -0.28;
+    body.add(quiver);
+    for (let i = 0; i < 3; i++) body.add(cyl(0.004, 0.004, 0.24, MAT.cloth('#e5d3a9'), -0.12 + i * 0.025, 0.53, -0.13, 4));
+  }
+
   const weapon = new THREE.Group();
   weapon.name = 'weapon';
   if (style.weapon === 'sword') {
-    weapon.add(cyl(0.012, 0.015, 0.1, MAT.darkWood(), 0, 0.0, 0, 5));
-    weapon.add(box(0.03, 0.28, 0.012, metal, 0, 0.18, 0));
+    weapon.add(cyl(0.014, 0.016, 0.12, MAT.darkWood(), 0, 0.015, 0, 5));
+    weapon.add(box(0.12, 0.025, 0.025, trim, 0, 0.08, 0));
+    weapon.add(box(0.035, 0.3, 0.018, metal, 0, 0.24, 0.012));
+    weapon.add(cone(0.028, 0.09, metal, 0, 0.435, 0.012, 4));
   } else if (style.weapon === 'axe') {
-    weapon.add(cyl(0.014, 0.016, 0.34, MAT.wood(), 0, 0.1, 0, 5));
-    const blade = box(0.1, 0.12, 0.02, metal, 0.06, 0.24, 0);
-    weapon.add(blade);
+    weapon.add(cyl(0.015, 0.017, 0.39, MAT.wood(), 0, 0.15, 0, 5));
+    weapon.add(box(0.2, 0.13, 0.035, metal, 0.085, 0.31, 0));
+    weapon.add(cone(0.06, 0.15, metal, 0.15, 0.3, 0, 5));
   } else if (style.weapon === 'spear') {
-    weapon.add(cyl(0.012, 0.014, 0.5, MAT.wood(), 0, 0.2, 0, 5));
-    weapon.add(cone(0.03, 0.1, metal, 0, 0.48, 0, 5));
+    weapon.add(cyl(0.013, 0.015, 0.62, MAT.wood(), 0, 0.2, 0, 5));
+    weapon.add(cone(0.043, 0.14, metal, 0, 0.58, 0, 5));
+    weapon.add(box(0.09, 0.025, 0.025, trim, 0, 0.48, 0));
   } else if (style.weapon === 'bow') {
-    const bow = new THREE.Mesh(new THREE.TorusGeometry(0.13, 0.012, 4, 10, Math.PI * 1.1), MAT.wood());
-    bow.rotation.y = Math.PI / 2;
-    bow.rotation.z = 0.4;
+    const bow = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.014, 5, 12, Math.PI * 1.12), MAT.wood());
+    bow.rotation.z = Math.PI / 2;
     weapon.add(bow);
-    weapon.add(box(0.005, 0.24, 0.005, MAT.cloth('#e8e0cc'), 0, 0.0, 0.09));
+    weapon.add(box(0.014, 0.3, 0.014, MAT.cloth('#e7dcc4'), 0, 0, 0.018));
+    weapon.add(cyl(0.009, 0.009, 0.34, MAT.wood(), 0, 0.18, 0, 4));
   }
-  if (style.weapon !== 'bow') {
-    weapon.position.set(0.24, 0.34, 0.03);
-    weapon.rotation.z = style.weapon === 'spear' ? 0.12 : -0.25;
-  } else {
-    weapon.position.set(0.2, 0.4, 0.06);
-  }
-  body.add(weapon);
-  // shield
-  if (style.shield) {
-    const radius = style.bigShield ? 0.17 : 0.13;
-    const shield = cyl(radius, radius, 0.03, tunic, -0.2, 0.36, 0.06, 12);
-    shield.rotation.z = Math.PI / 2;
-    shield.rotation.y = 0.25;
-    const boss = sph(0.04, metal, -0.2, 0.36, 0.09, 6);
-    body.add(shield, boss);
-    const rim = cyl(radius * 1.02, radius * 1.02, 0.012, trim, -0.2, 0.36, 0.045, 12);
-    rim.rotation.z = Math.PI / 2;
-    rim.rotation.y = 0.25;
-    body.add(rim);
-  }
-  body.scale.setScalar(scale);
-  g.add(body);
+  weapon.position.set(0, -0.17, 0.045);
+  if (style.weapon === 'axe') weapon.rotation.z = -0.22;
+  if (style.weapon === 'spear') weapon.rotation.z = -0.08;
+  armR.add(weapon);
 
-  // selection / hover ring lives outside the body so it never animates
-  const ring = new THREE.Mesh(hexRingGeometry(0.24, 0.32, 0.005), new THREE.MeshBasicMaterial({
-    color: '#ffe9a8', transparent: true, opacity: 0, side: THREE.DoubleSide,
+  // A small clan-colour mantle/tabard stays legible in the overhead camera.
+  const badge = new THREE.Mesh(new THREE.CircleGeometry(0.035, 8), trim);
+  badge.position.set(0, 0.405, 0.164);
+  body.add(badge);
+  body.scale.setScalar(style.scale || 1);
+
+  const ring = new THREE.Mesh(circularRingGeometry(0.24, 0.32, 0.008), new THREE.MeshBasicMaterial({
+    color: '#ffe9a8', transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false,
   }));
   ring.name = 'selectRing';
   g.add(ring);
 
-  g.userData.parts = { body, head, armL, armR, weapon };
+  g.userData.parts = { body, head, armL, armR, legL, legR, weapon, shield, cape };
   g.userData.style = style;
   return g;
 }

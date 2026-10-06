@@ -247,7 +247,7 @@ bindHold('btnRotR', () => view.rotateBy(0.09));
 bindHold('btnZoomIn', () => view.zoomBy(1.06));
 bindHold('btnZoomOut', () => view.zoomBy(0.94));
 document.getElementById('btnCamReset').onclick = () => {
-  if (view.kind === '3d' && view.threeD) {
+  if (view.isWorld3D && view.threeD) {
     view.threeD.rig.yaw = Math.PI * 0.25;
     view.threeD.rig.pitch = 0.92;
   }
@@ -256,17 +256,13 @@ document.getElementById('btnCamReset').onclick = () => {
 
 // ---------------- renderer switch ----------------
 function setRenderer(kind) {
-  if (kind === '3d') {
-    const r = view.use3D();
-    if (!r.ok) {
-      E.addToast(app.state, `3D unavailable: ${r.reason}`, 'bad');
-      return;
-    }
-    E.addToast(app.state, '3D view enabled', 'good');
-  } else {
-    view.use2D();
-    E.addToast(app.state, 'Classic 2D view', 'good');
+  const result = kind === 'raster3d' ? view.useRaster3D() : view.use3D();
+  if (!result.ok) {
+    E.addToast(app.state, `${kind === 'raster3d' ? 'CPU 3D' : 'WebGL 3D'} unavailable: ${result.reason}`, 'bad');
+    syncRendererUI();
+    return;
   }
+  E.addToast(app.state, kind === 'raster3d' ? 'Software 3D view enabled' : 'WebGL 3D view enabled', 'good');
   view.defaultZoom();
   const st = app.state;
   if (st) {
@@ -277,34 +273,31 @@ function setRenderer(kind) {
   syncRendererUI();
 }
 function syncRendererUI() {
+  const webgl = view.kind === '3d';
   const label = document.getElementById('rendererLabel');
-  if (label) {
-    label.textContent = view.kind === '3d' ? '3D' : '2D';
-  }
+  if (label) label.textContent = webgl ? 'WebGL 3D' : 'CPU 3D';
   const note = document.getElementById('rendererNote');
   if (note) {
-    note.textContent = view.kind === '3d'
-      ? 'Rendering the world with WebGL (three.js). Q/E rotate, R/F tilt, wheel zooms.'
-      : `Classic canvas renderer${view.fallbackReason ? ` — ${view.fallbackReason}` : ''}.`;
+    note.textContent = webgl
+      ? 'Rendering the shared 3D world with WebGL. Q/E rotate, R/F tilt, wheel zooms.'
+      : `Rendering the shared 3D world with the CPU rasterizer${view.fallbackReason ? ` — ${view.fallbackReason}` : ''}.`;
   }
-  const to3d = document.getElementById('btnUse3D');
-  const to2d = document.getElementById('btnUse2D');
-  if (to3d) to3d.disabled = view.kind === '3d';
-  if (to2d) to2d.disabled = view.kind === '2d';
-  // a plain badge in the top bar so it is obvious whether the world is WebGL 3D
-  // or the 2D compatibility view
+  const toWebGL = document.getElementById('btnUse3D');
+  const toRaster = document.getElementById('btnUseRaster3D');
+  if (toWebGL) toWebGL.disabled = webgl;
+  if (toRaster) toRaster.disabled = !webgl;
   const badge = document.getElementById('rendererBadge');
   if (badge) {
-    const three = view.kind === '3d';
-    badge.textContent = three ? '3D' : '2D';
-    badge.classList.toggle('warn', !three);
-    badge.title = three
-      ? 'WebGL 3D world'
-      : `2D compatibility view${view.fallbackReason ? ` — ${view.fallbackReason}` : ''}`;
+    badge.textContent = 'r5-world';
+    badge.dataset.renderer = view.kind;
+    badge.classList.toggle('warn', !webgl);
+    badge.title = webgl
+      ? 'r5-world build · WebGL 3D renderer'
+      : `r5-world build · CPU 3D renderer${view.fallbackReason ? ` — ${view.fallbackReason}` : ''}`;
   }
 }
 document.getElementById('btnUse3D').onclick = () => setRenderer('3d');
-document.getElementById('btnUse2D').onclick = () => setRenderer('2d');
+document.getElementById('btnUseRaster3D').onclick = () => setRenderer('raster3d');
 app.setRenderer = setRenderer;
 
 document.getElementById('btnPause').onclick = () => togglePause();

@@ -9,11 +9,11 @@ import { buildBuildingMesh } from '../src/buildings3d.js';
 import {
   buildUnitMesh, buildVillagerMesh, workToolFor, buildDeerMesh,
   buildTreeVariants, buildRockVariants, buildOreVariant, buildRuinVariants, buildPlotVariant,
-  mergeMeshes, hexRingGeometry,
+  mergeMeshes, circularRingGeometry,
 } from '../src/models3d.js';
 import {
   terrainHeightAt, elevationAt, elevationOf, worldToTile, tileElevation,
-  buildTerrainMesh, buildWaterMesh, buildSeaFloorMesh, buildTerritoryMesh, drapeGeometry,
+  buildTerrainMesh, buildWaterMesh, buildSeaFloorMesh, buildTerritoryMesh, buildSoftWashGeometry, drapeGeometry,
   terrainSignature, ownershipSignature, mapExtent,
   WATER_LEVEL, BASE_Y, TERRAIN_STEP, SHORE_DROP,
 } from '../src/terrain3d.js';
@@ -208,6 +208,13 @@ section('Territory as a geographic overlay');
   // and its colours are the clans', desaturated for the ground
   ok(ownershipSignature(state) === ownershipSignature(game()), 'the ownership signature is stable');
 
+  const home = state.starts[0];
+  const decal = buildSoftWashGeometry(state, home.x, home.y, 0.95);
+  const decalAlpha = decal.getAttribute('color');
+  ok(decalAlpha.itemSize === 4 && decalAlpha.getW(0) === 1, 'interaction decals have a soft radial alpha field');
+  ok(decalAlpha.getW(decalAlpha.count - 1) === 0, 'soft decals disappear at their circular edge');
+  ok(decal.index.count > 300, 'soft decals use a smooth fan, not a six-sided outline', decal.index.count);
+
   // capturing a tile changes the signature (so the renderer rebuilds it)
   const target = state.tiles.find((t) => t.owner === null && E.neighborsOf(t, state).some((n) => n.owner === 0));
   if (target) {
@@ -371,13 +378,22 @@ section('Buildings (every type)');
 section('Units and villagers');
 {
   const state = game();
+  const silhouettes = new Set();
   for (const type of ['warrior', 'axe', 'shield', 'scout', 'warchief']) {
     const g = buildUnitMesh(type, '#3f9e8f', '#63c7b7');
     const parts = g.userData.parts;
-    ok(parts && parts.body && parts.armL && parts.armR && parts.weapon, `${type} has animatable parts`);
-    ok(countMeshes(g) >= 8, `${type} is a full figure (torso, head, arms, legs, weapon)`, countMeshes(g));
-    ok(!!g.getObjectByName('selectRing'), `${type} carries a selection ring`);
+    ok(parts && parts.body && parts.armL && parts.armR && parts.weapon && parts.legL && parts.legR,
+      `${type} has articulated body, arms, legs and weapon pivots`);
+    ok(countMeshes(g) >= 12, `${type} is a detailed full 3D figure`, countMeshes(g));
+    ok(!!g.getObjectByName('selectRing'), `${type} carries a circular selection marker`);
+    ok(!!g.userData.style.role, `${type} declares its role silhouette`, g.userData.style.role);
+    silhouettes.add(`${g.userData.style.weapon}|${g.userData.style.helmet}|${g.userData.style.armor}|${g.userData.style.shield}`);
+    const ringGeo = g.getObjectByName('selectRing').geometry;
+    ok(ringGeo.getAttribute('position').count === 128, `${type} marker is a smooth circle, not a hex`);
   }
+  ok(silhouettes.size === 5, 'all five military unit silhouettes differ');
+  const roundMarker = circularRingGeometry(0.24, 0.32);
+  ok(roundMarker.index.count === 32 * 6, 'unit marker geometry is tessellated as a circle');
   for (const tool of ['axe', 'pick', 'sickle', 'rod', 'bow']) {
     const v = buildVillagerMesh('#c9b184', '#f0b757', tool);
     ok(countMeshes(v) >= 8, `villager with a ${tool} is a full figure`, countMeshes(v));
@@ -517,7 +533,7 @@ section('Ground helpers and misc');
 {
   const state = game();
   const t = state.tiles[40];
-  const ring = hexRingGeometry(0.9, 1.0, 0);
+  const ring = circularRingGeometry(0.9, 1.0, 0);
   drapeGeometry(state, ring, t.x, t.y, 0.05);
   const pos = ring.getAttribute('position');
   let offSurface = 0;
@@ -547,7 +563,7 @@ section('Hex ↔ 3D mapping');
 
 section('Fallback safety');
 {
-  ok(webglAvailable() === false, 'Node reports no WebGL — the 2D fallback path is what tests use');
+  ok(webglAvailable() === false, 'Node reports no WebGL — tests use the CPU 3D rasterizer path');
   const state = game();
   ok(buildTerrainMesh(state) instanceof THREE.Mesh, 'the terrain builds without a renderer');
   ok(buildBuildingMesh('house', '#fff', '#000', true) instanceof THREE.Group, 'buildings build without a renderer');

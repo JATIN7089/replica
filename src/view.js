@@ -1,182 +1,156 @@
 // ============================================================================
-// Northhold — view adapter.
-// The game is drawn either by the 3D renderer (WebGL/three.js) or by the 2D
-// canvas renderer used as an automatic fallback (no WebGL, or the player asks
-// for it). Everything else — input, camera controls, minimap — talks to this
-// adapter, so both renderers are interchangeable.
+// Northhold — renderer adapter.
+// The game has one world renderer and two backends: WebGL and a CPU rasterizer.
+// Both render the same continuous 3D scene; the gameplay hexes are never drawn
+// as a second, tiled 2D world.
 // ============================================================================
-import * as R2D from './render.js';
 import { createRenderer3D, webglAvailable, screenToGround } from './render3d.js';
+import { createRaster3DRenderer, drawMinimap } from './raster3d.js';
+
+function setupSurfaces(minimap) {
+  let mctx = minimap.getContext('2d');
+  if (!mctx) throw new Error('2D canvas context unavailable for the minimap');
+  function resize() {
+    const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+    const w = minimap.clientWidth || 220;
+    const h = minimap.clientHeight || 160;
+    minimap.width = Math.floor(w * dpr);
+    minimap.height = Math.floor(h * dpr);
+    mctx = minimap.getContext('2d');
+    mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    minimap._w = w;
+    minimap._h = h;
+  }
+  resize();
+  return {
+    resize,
+    get mctx() { return mctx; },
+    get minimap() { return minimap; },
+  };
+}
 
 /**
- * @param {HTMLCanvasElement} canvas   the map canvas
- * @param {HTMLCanvasElement} minimap  the (always 2D) minimap canvas
- * A canvas that has already handed out a 2D context can never host a WebGL
- * context, so switching renderers swaps in a brand new canvas element with the
- * same id/class. Input is attached to the parent element, so it survives.
+ * @param {HTMLCanvasElement} canvas map surface
+ * @param {HTMLCanvasElement} minimap always-2D navigation surface
  */
 export function createView(canvas, minimap) {
   let mapCanvas = canvas;
-  const surfaces = R2D.setupCanvas(mapCanvas, minimap);
+  const surfaces = setupSurfaces(minimap);
   const api = {
-    kind: '2d',
+    kind: 'raster3d',
     fallbackReason: null,
     threeD: null,
     surfaces,
     get canvas() { return mapCanvas; },
+    get isWorld3D() { return !!api.threeD; },
   };
 
   function freshCanvas() {
     const next = document.createElement('canvas');
     next.id = mapCanvas.id || 'map';
     next.className = mapCanvas.className;
-    next.setAttribute('aria-label', mapCanvas.getAttribute('aria-label') || 'game map');
+    next.setAttribute('aria-label', mapCanvas.getAttribute('aria-label') || 'game world');
     return next;
   }
 
-  /** Build a renderer on a fresh canvas; only swap it into the page on success. */
-  function makeThreeD() {
-    // probe first: constructing three's WebGLRenderer without a context only
-    // logs an ugly console error and throws a generic message
+  function install(createRenderer) {
+    const next = freshCanvas();
+    const renderer = createRenderer(next);
+    const previous = api.threeD;
+    mapCanvas.replaceWith(next);
+    mapCanvas = next;
+    api.threeD = renderer;
+    api.kind = renderer.kind || '3d';
+    if (previous) {
+      try { previous.dispose(); } catch { /* a failed driver cleanup must not strand the new renderer */ }
+    }
+    return renderer;
+  }
+
+  function makeWebGL() {
     if (!webglAvailable()) throw new Error('WebGL is not available in this browser');
-    const next = freshCanvas();
-    const r = createRenderer3D(next);
-    mapCanvas.replaceWith(next);
-    mapCanvas = next;
-    api.threeD = r;
-    api.kind = '3d';
-    surfaces.rebind(next);
-    return r;
-  }
-  function make2D() {
-    const next = freshCanvas();
-    const ctx = next.getContext('2d');
-    if (!ctx) throw new Error('2D canvas context unavailable');
-    mapCanvas.replaceWith(next);
-    mapCanvas = next;
-    api.threeD = null;
-    api.kind = '2d';
-    surfaces.rebind(next);
-    return next;
+    const renderer = install((next) => createRenderer3D(next));
+    api.fallbackReason = null;
+    return renderer;
   }
 
+  function makeRaster3D() {
+    return install((next) => createRenderer3D(next, {
+      rendererFactory: (surface) => createRaster3DRenderer(surface),
+    }));
+  }
+
+  // Prefer WebGL, but always keep a playable 3D world when the browser has no
+  // GPU context. The software path is also selectable for visual diagnosis.
   try {
-    if (webglAvailable()) makeThreeD();
-    else api.fallbackReason = 'WebGL is not available in this browser';
+    if (webglAvailable()) makeWebGL();
+    else {
+      api.fallbackReason = 'WebGL is not available; using the CPU 3D rasterizer';
+      makeRaster3D();
+    }
   } catch (err) {
-    api.threeD = null;
-    api.fallbackReason = err?.message || 'WebGL failed to start';
+    api.fallbackReason = `${err?.message || 'WebGL failed to start'}; using the CPU 3D rasterizer`;
+    makeRaster3D();
   }
 
-  // ---------------------------------------------------------------- switching
   api.use3D = () => {
     if (api.kind === '3d') return { ok: true };
     try {
-      makeThreeD();
+      makeWebGL();
       return { ok: true };
     } catch (err) {
-      api.kind = '2d';
-      api.threeD = null;
       api.fallbackReason = err?.message || 'WebGL failed to start';
       return { ok: false, reason: api.fallbackReason };
     }
   };
-  api.use2D = () => {
-    if (api.threeD) {
-      try { api.threeD.dispose(); } catch { /* ignore */ }
-      api.threeD = null;
-      try {
-        make2D();     // a WebGL canvas cannot hand out a 2D context either
-      } catch (err) {
-        api.kind = '2d';
-        api.fallbackReason = err?.message;
-      }
+  api.useRaster3D = () => {
+    if (api.kind === 'raster3d') return { ok: true };
+    try {
+      makeRaster3D();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, reason: err?.message || 'CPU rasterizer failed to start' };
     }
-    api.kind = '2d';
-    return { ok: true };
   };
 
-  // ---------------------------------------------------------------- frames
   api.resize = () => {
-    if (api.kind === '3d' && api.threeD) api.threeD.size();
-    else surfaces.resize();
+    if (api.threeD) api.threeD.size();
+    surfaces.resize();
   };
   api.draw = (state, ui, dt) => {
-    if (api.kind === '3d' && api.threeD) api.threeD.draw(state, ui, dt);
-    else R2D.draw(surfaces.ctx, state, mapCanvas, ui, dt);
+    if (api.threeD) api.threeD.draw(state, ui, dt);
   };
-  api.drawMinimap = (state) => R2D.drawMinimap(surfaces.mctx, state, minimap);
+  api.drawMinimap = (state) => drawMinimap(surfaces.mctx, state, minimap);
 
-  // ---------------------------------------------------------------- picking
-  api.screenToTile = (sx, sy, state) => {
-    if (api.kind === '3d' && api.threeD) return api.threeD.screenToTile(state, sx, sy);
-    return R2D.screenToTile(sx, sy, state);
-  };
-  /** world (tile space) → css pixels; used for unit/building hit tests */
+  // Picking and camera operations are shared by both 3D backends.
+  api.screenToTile = (sx, sy, state) => api.threeD?.screenToTile(state, sx, sy) || null;
   api.worldToScreen = (x, y, elevation = 0.45) => {
-    if (api.kind === '3d' && api.threeD) {
-      const p = api.threeD.groundToScreen(x, y, elevation);
-      return { x: p.x, y: p.y };
-    }
-    return R2D.worldToScreen(x, y);
+    if (!api.threeD) return { x: 0, y: 0 };
+    const p = api.threeD.groundToScreen(x, y, elevation);
+    return { x: p.x, y: p.y };
   };
-
-  // ---------------------------------------------------------------- camera
-  api.centerOn = (x, y) => {
-    if (api.kind === '3d' && api.threeD) api.threeD.centerOn(x, y);
-    else R2D.centerOn(x, y, mapCanvas);
-  };
-  api.panBy = (dxPx, dyPx) => {
-    if (api.kind === '3d' && api.threeD) {
-      api.threeD.panBy(dxPx, dyPx);
-      return;
-    }
-    R2D.cam.x += dxPx;
-    R2D.cam.y += dyPx;
-    R2D.clampCam(mapCanvas);
-  };
-  api.zoomAt = (sx, sy, factor) => {
-    if (api.kind === '3d' && api.threeD) {
-      api.threeD.zoomAt(sx, sy, factor);
-      return;
-    }
-    const before = R2D.screenToWorld(sx, sy);
-    R2D.cam.zoom = Math.max(R2D.cam.minZoom, Math.min(R2D.cam.maxZoom, R2D.cam.zoom * factor));
-    const after = R2D.screenToWorld(sx, sy);
-    R2D.cam.x += (after.x - before.x) * R2D.cam.zoom;
-    R2D.cam.y += (after.y - before.y) * R2D.cam.zoom;
-    R2D.clampCam(mapCanvas);
-  };
+  api.centerOn = (x, y) => api.threeD?.centerOn(x, y);
+  api.panBy = (dxPx, dyPx) => api.threeD?.panBy(dxPx, dyPx);
+  api.zoomAt = (sx, sy, factor) => api.threeD?.zoomAt(sx, sy, factor);
   api.zoomBy = (factor) => api.zoomAt(mapCanvas._w / 2, mapCanvas._h / 2, factor);
-  api.rotateBy = (rad) => { if (api.kind === '3d' && api.threeD) api.threeD.rotateBy(rad); };
-  api.tiltBy = (rad) => { if (api.kind === '3d' && api.threeD) api.threeD.tiltBy(rad); };
-  api.setZoom = (v) => {
-    if (api.kind === '3d' && api.threeD) api.threeD.setZoom(v);
-    else R2D.cam.zoom = Math.max(R2D.cam.minZoom, Math.min(R2D.cam.maxZoom, v));
-  };
-  api.getZoom = () => (api.kind === '3d' && api.threeD ? api.threeD.getZoom() : R2D.cam.zoom);
-  /** default zoom level when a game starts */
+  api.rotateBy = (rad) => api.threeD?.rotateBy(rad);
+  api.tiltBy = (rad) => api.threeD?.tiltBy(rad);
+  api.setZoom = (v) => api.threeD?.setZoom(v);
+  api.getZoom = () => api.threeD?.getZoom() ?? 26;
   api.defaultZoom = () => {
     const small = (typeof window !== 'undefined' ? window.innerWidth : 1280) < 720;
-    if (api.kind === '3d' && api.threeD) api.threeD.setZoom(small ? 36 : 26);
-    else R2D.cam.zoom = small ? 34 : 46;
+    api.setZoom(small ? 36 : 26);
   };
-  /** map floor hit for callers that need raw ground coordinates */
   api.screenToWorld = (sx, sy) => {
-    if (api.kind === '3d' && api.threeD) {
-      const hit = screenToGround(api.threeD.rig, api.threeD.camera, sx, sy, mapCanvas._w, mapCanvas._h);
-      return hit ? { x: hit.x, y: hit.z } : null;
-    }
-    return R2D.screenToWorld(sx, sy);
+    if (!api.threeD) return null;
+    const hit = screenToGround(api.threeD.rig, api.threeD.camera, sx, sy, mapCanvas._w, mapCanvas._h);
+    return hit ? { x: hit.x, y: hit.z } : null;
   };
-  /** clickable radius (css pixels) for units and buildings */
   api.pickRadius = () => {
-    if (api.kind === '3d' && api.threeD) {
-      const d = api.threeD.getZoom();
-      return Math.max(16, Math.min(46, 900 / Math.max(1, d)));
-    }
-    return R2D.cam.zoom * 0.32;
+    const distance = api.getZoom();
+    return Math.max(16, Math.min(46, 900 / Math.max(1, distance)));
   };
 
+  if (typeof window !== 'undefined') window.addEventListener('resize', api.resize);
   return api;
 }

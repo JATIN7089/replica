@@ -38,6 +38,8 @@ function makeCtxStub(canvas) {
     calls: 0,
     createLinearGradient: () => grad,
     createRadialGradient: () => grad,
+    createImageData: (width, height) => ({ width, height, data: new Uint8ClampedArray(width * height * 4) }),
+    putImageData: () => { target.calls++; },
     measureText: () => ({ width: 12 }),
   };
   return new Proxy(target, {
@@ -64,7 +66,7 @@ for (const prop of ['clientWidth', 'clientHeight']) {
 }
 const contexts = new Map();
 window.HTMLCanvasElement.prototype.getContext = function (kind) {
-  // jsdom really has no WebGL: report that faithfully so the app takes its 2D path
+  // jsdom really has no WebGL: report that faithfully so the app takes CPU 3D
   if (kind !== '2d') return null;
   if (!contexts.has(this)) contexts.set(this, makeCtxStub(this));
   return contexts.get(this);
@@ -136,7 +138,7 @@ try {
 }
 const mapCtx = contexts.get(document.getElementById('map'));
 const miniCtx = contexts.get(document.getElementById('minimap'));
-ok(mapCtx.calls > 500, 'the map canvas is actually drawn to', mapCtx.calls);
+ok(mapCtx.calls > 0, 'the CPU rasterizer writes a rendered frame to the map canvas', mapCtx.calls);
 ok(miniCtx.calls > 20, 'the minimap is drawn', miniCtx.calls);
 
 console.log('\nHUD state');
@@ -282,23 +284,25 @@ console.log('\nRenderer & 3D camera');
 {
   const { view, setRenderer } = window.__northhold;
   ok(!!view, 'the view adapter is mounted');
-  ok(view.kind === '2d', 'no WebGL in jsdom → the 2D fallback is used', view.kind);
+  ok(view.kind === 'raster3d', 'no WebGL in jsdom → the CPU 3D rasterizer is used', view.kind);
   ok(!!view.fallbackReason, 'the fallback explains itself', view.fallbackReason);
   const badge = document.getElementById('rendererBadge');
-  ok(!!badge && badge.textContent === '2D', 'the top bar badge shows the active renderer', badge && badge.textContent);
-  ok(badge.classList.contains('warn'), 'the badge warns when 3D is not in use');
+  ok(!!badge && badge.textContent === 'r5-world', 'the top-bar build stamp is visible', badge && badge.textContent);
+  ok(badge.dataset.renderer === 'raster3d', 'the badge diagnoses the active CPU backend', badge.dataset.renderer);
+  ok(badge.classList.contains('warn'), 'the badge distinguishes the compatibility backend');
 
-  ok(view.screenToTile(640, 360, A.state) != null, 'the fallback picks tiles from screen coordinates');
-  const s3 = setRenderer('3d');
+  ok(view.screenToTile(640, 360, A.state) != null, 'the CPU 3D view picks tiles from screen coordinates');
+  setRenderer('3d');
   runFrames(3);
-  ok(view.kind === '2d', 'asking for 3D without WebGL keeps the working 2D renderer', view.kind);
-  ok(/3D unavailable|WebGL/i.test(document.getElementById('toasts').textContent), 'the player is told why 3D failed');
-  ok(view.use2D().ok, 'switching back to 2D is always safe');
+  ok(view.kind === 'raster3d', 'missing WebGL keeps the working CPU 3D renderer', view.kind);
+  ok(/3D unavailable|WebGL/i.test(document.getElementById('toasts').textContent), 'the player is told why WebGL failed');
+  ok(view.useRaster3D().ok, 'switching back to the CPU 3D renderer is safe');
 
   const before = view.getZoom();
+  const yawBefore = view.threeD.rig.yaw;
   view.rotateBy(0.3);
   view.tiltBy(0.1);
-  ok(true, 'rotate/tilt are safe in 2D (no-ops)');
+  ok(view.threeD.rig.yaw !== yawBefore, 'the CPU 3D camera can orbit and tilt');
   view.zoomBy(1.05);
   ok(view.getZoom() !== before, 'zoom works through the adapter', `${before} → ${view.getZoom()}`);
   const centre = view.worldToScreen(A.state.starts[0].x, A.state.starts[0].y);
@@ -341,7 +345,8 @@ console.log('\nPause menu & save/load');
     document.getElementById('rendererLabel').textContent);
   {
     const v = window.__northhold.view;
-    ok(document.getElementById('btnUse3D').disabled === (v.kind === '3d'), 'renderer buttons reflect the state');
+    ok(document.getElementById('btnUse3D').disabled === (v.kind === '3d'), 'WebGL button reflects the active backend');
+    ok(document.getElementById('btnUseRaster3D').disabled === (v.kind !== '3d'), 'CPU 3D button reflects the active backend');
   }
   ok(/year \d+/.test(document.getElementById('pauseInfo').textContent), 'pause menu summarises the game',
     document.getElementById('pauseInfo').textContent);

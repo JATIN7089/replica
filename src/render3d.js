@@ -1,7 +1,7 @@
 // ============================================================================
-// Northhold — 3D world renderer (three.js r169, vendored).
-// Draws the hex map, terrain, decorations, buildings, units and effects in
-// three dimensions with an RTS camera rig. This module only reads game state.
+// Northhold — shared 3D world scene (three.js r169, vendored).
+// WebGL and the CPU rasterizer draw this same continuous terrain, props,
+// buildings, units and effects through an RTS camera rig. Reads game state only.
 // ============================================================================
 import * as THREE from '../vendor/three.module.min.js';
 import { BUILDINGS, SEASONS } from './data.js';
@@ -9,13 +9,12 @@ import { hexToWorld, tileById, seasonIndexOf, winterAmount } from './engine.js';
 import { buildBuildingMesh } from './buildings3d.js';
 import {
   buildUnitMesh, buildVillagerMesh, buildDeerMesh,
-  hexRingGeometry, HEX_RADIUS, TILE_HEIGHT,
   buildTreeVariants, buildRockVariants, buildOreVariant, buildRuinVariants, buildPlotVariant,
 } from './models3d.js';
 import {
   WATER_LEVEL, BASE_Y, terrainHeightAt, elevationAt, elevationOf, worldToTile, tileElevation,
-  buildTerrainMesh, buildWaterMesh, buildTerritoryMesh, buildSeaFloorMesh,
-  terrainSignature, ownershipSignature, drapeGeometry, TERRAIN_STEP,
+  buildTerrainMesh, buildWaterMesh, buildTerritoryMesh, buildSeaFloorMesh, buildSoftWashGeometry,
+  terrainSignature, ownershipSignature, TERRAIN_STEP,
 } from './terrain3d.js';
 import { buildScatter, scatterSignature } from './scatter3d.js';
 
@@ -368,9 +367,6 @@ export function createRenderer3D(canvas, opts = {}) {
   let swayTimer = 0;
   const swayers = [];        // { mesh, items, base:Float32Array } for wind animation
 
-  const ringGeo = hexRingGeometry(HEX_RADIUS * 0.9, HEX_RADIUS * 1.0, 0);
-  const unitRingGeo = hexRingGeometry(0.26, 0.34, 0.006);
-
   // ---------------------------------------------------------------- scatter
   function addInstanced(list, variants, materialOpts, layer) {
     if (!list.length) return null;
@@ -508,11 +504,13 @@ export function createRenderer3D(canvas, opts = {}) {
       wanted.add(tile.id);
       let ring = maps.captures.get(tile.id);
       if (!ring) {
-        ring = new THREE.Mesh(ringGeo.clone(), new THREE.MeshBasicMaterial({
-          color: '#ffd27a', transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false,
+        ring = new THREE.Mesh(buildSoftWashGeometry(s, tile.x, tile.y, 0.9, {
+          rings: 5, segments: 28, offset: 0.055,
+        }), new THREE.MeshBasicMaterial({
+          color: '#ffd27a', vertexColors: true, transparent: true, opacity: 0.58,
+          side: THREE.DoubleSide, depthWrite: false,
         }));
         ring.position.set(tile.x, 0, tile.y);
-        drapeGeometry(s, ring.geometry, tile.x, tile.y, 0.05);
         maps.captures.set(tile.id, ring);
         layers.fx.add(ring);
       }
@@ -618,10 +616,14 @@ export function createRenderer3D(canvas, opts = {}) {
       const parts = entry.parts;
       if (parts) {
         const moving = Math.hypot(dx, dy) > 0.0015;
-        const bob = moving ? Math.sin(time * 11 + u.id * 0.7) : Math.sin(time * 2 + u.id) * 0.2;
-        parts.body.position.y = moving ? Math.abs(bob) * 0.06 : 0;
-        parts.armL.rotation.x = moving ? bob * 0.6 : 0;
-        parts.armR.rotation.x = moving ? -bob * 0.6 : 0;
+        const phase = time * 11 + u.id * 0.7;
+        const gait = moving ? Math.sin(phase) : Math.sin(time * 2 + u.id) * 0.12;
+        const stride = moving ? 0.68 : 0.06;
+        parts.body.position.y = moving ? Math.abs(Math.sin(phase * 2)) * 0.045 : Math.sin(time * 2 + u.id) * 0.012;
+        parts.armL.rotation.x = moving ? -gait * 0.42 : Math.sin(time * 1.7 + u.id) * 0.035;
+        parts.armR.rotation.x = moving ? gait * 0.42 : Math.sin(time * 1.7 + u.id + 1) * 0.035;
+        if (parts.legL) parts.legL.rotation.x = gait * stride;
+        if (parts.legR) parts.legR.rotation.x = -gait * stride;
         if (moving) {
           const heading = Math.atan2(dx, dy);
           parts.body.rotation.y += angleDelta(parts.body.rotation.y, heading) * 0.2;
@@ -629,10 +631,13 @@ export function createRenderer3D(canvas, opts = {}) {
           parts.body.rotation.y += angleDelta(parts.body.rotation.y, Math.PI * 0.5) * 0.05;
         }
         if (u.attackAnim > 0) {
-          parts.weapon.rotation.x = -1.25;
+          parts.armR.rotation.x = -0.75;
+          parts.weapon.rotation.x = -0.62;
+          if (parts.armL) parts.armL.rotation.x = 0.22;
         } else {
-          parts.weapon.rotation.x *= 0.75;
+          parts.weapon.rotation.x *= 0.72;
         }
+        parts.body.rotation.x = u.attackAnim > 0 ? -0.09 : (moving ? Math.sin(phase) * 0.025 : 0);
         parts.body.rotation.z = u.attackAnim > 0 ? 0.1 : 0;
       }
 
@@ -674,10 +679,12 @@ export function createRenderer3D(canvas, opts = {}) {
       if (maps.highlights.has(id)) continue;
       const tile = tileById(s, id);
       if (!tile) continue;
-      const geo = ringGeo.clone();
-      drapeGeometry(s, geo, tile.x, tile.y, 0.06);
+      const geo = buildSoftWashGeometry(s, tile.x, tile.y, 0.98, {
+        rings: 5, segments: 28, offset: 0.06,
+      });
       const ring = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
-        color, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false,
+        color, vertexColors: true, transparent: true, opacity: 0.56,
+        side: THREE.DoubleSide, depthWrite: false,
       }));
       ring.position.set(tile.x, 0, tile.y);
       maps.highlights.set(id, ring);
@@ -692,14 +699,23 @@ export function createRenderer3D(canvas, opts = {}) {
     }
     if (ui.hoverTile) {
       if (!hoverRing) {
-        hoverRing = new THREE.Mesh(ringGeo.clone(), new THREE.MeshBasicMaterial({
-          color: '#ffffff', transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false,
+        hoverRing = new THREE.Mesh(buildSoftWashGeometry(s, ui.hoverTile.x, ui.hoverTile.y, 0.87, {
+          rings: 5, segments: 24, offset: 0.07,
+        }), new THREE.MeshBasicMaterial({
+          color: '#ffffff', vertexColors: true, transparent: true, opacity: 0.42,
+          side: THREE.DoubleSide, depthWrite: false,
         }));
+        hoverRing.userData.tileId = ui.hoverTile.id;
+        hoverRing.position.set(ui.hoverTile.x, 0, ui.hoverTile.y);
         layers.fx.add(hoverRing);
       }
       if (hoverRing.userData.tileId !== ui.hoverTile.id) {
         hoverRing.userData.tileId = ui.hoverTile.id;
-        drapeGeometry(s, hoverRing.geometry, ui.hoverTile.x, ui.hoverTile.y, 0.07);
+        const previous = hoverRing.geometry;
+        hoverRing.geometry = buildSoftWashGeometry(s, ui.hoverTile.x, ui.hoverTile.y, 0.87, {
+          rings: 5, segments: 24, offset: 0.07,
+        });
+        previous.dispose();
         hoverRing.position.set(ui.hoverTile.x, 0, ui.hoverTile.y);
       }
       hoverRing.visible = true;
@@ -755,12 +771,14 @@ export function createRenderer3D(canvas, opts = {}) {
       }
       const from = { x: unit.x, z: unit.y };
       const to = { x: target.x, z: target.y };
+      const fromY = terrainHeightAt(s, from.x, from.z) + 0.12;
+      const toY = terrainHeightAt(s, to.x, to.z) + 0.12;
       const pos = m.line.geometry.attributes.position;
-      pos.setXYZ(0, from.x, TILE_HEIGHT + 0.1, from.z);
-      pos.setXYZ(1, to.x, TILE_HEIGHT + 0.1, to.z);
+      pos.setXYZ(0, from.x, fromY, from.z);
+      pos.setXYZ(1, to.x, toY, to.z);
       pos.needsUpdate = true;
       m.line.computeLineDistances();
-      m.dot.position.set(to.x, TILE_HEIGHT + 0.06, to.z);
+      m.dot.position.set(to.x, toY, to.z);
     }
   }
 
@@ -1030,7 +1048,8 @@ export function createRenderer3D(canvas, opts = {}) {
   }
 
   return {
-    kind: '3d',
+    kind: renderer.kind === 'raster3d' ? 'raster3d' : '3d',
+    isSoftware: renderer.kind === 'raster3d',
     scene,
     layers,
     camera,

@@ -1,33 +1,40 @@
 # PROJECT_STATE
 
-_Last updated: 2026-10-06 (session 1, milestone 5)_
+_Last updated: 2026-10-06 (session 2, milestone 6)_
 
 ## Project State
 
 **Northhold** — a browser real-time strategy game inspired by Northgard. Vanilla ES modules with
-vendored three.js for the 3D renderer, **zero network dependencies**, no build step. Served statically. Original code/art;
-no Northgard assets are used.
+vendored three.js, a WebGL renderer and a CPU 3D rasterizer when WebGL is unavailable. No build
+step or external runtime dependencies. The built-in static server binds to `0.0.0.0`, sends
+`no-store` responses and logs each request. Original code/art; no Northgard assets are used.
 
-Current version: **v0.5.0 — continuous 3D world (the hex board is gone)**.
+Current version: **v0.6.0 — CPU 3D fallback + Phase 6 units**. The top-bar build stamp is
+`r5-world`.
 
 * Engine suite: **90/90 passing** (`node tests/engine.test.js`)
 * Save/load suite: **48/48 passing** (`node tests/save.test.js`)
-* 3D model/camera/picking suite: **251/251 passing** (`node tests/render3d.test.js`)
-* 3D integration suite: **76/76 passing** (`node tests/ui.3d.test.js`, jsdom + a fake GL backend)
-* UI smoke suite: **84/84 passing** (`node tests/ui.smoke.test.js`, needs jsdom)
-* Full run: `npm test` (**549 assertions**)
+* 3D model/camera/picking suite: **266/266 passing** (`node tests/render3d.test.js`)
+* CPU rasterizer suite: **7/7 passing** (`node tests/raster3d.test.js`)
+* Static server suite: **6/6 passing** (`node tests/server.test.js`)
+* 3D integration suite: **78/78 passing** (`node tests/ui.3d.test.js`, jsdom + a fake GL backend)
+* UI smoke suite: **86/86 passing** (`node tests/ui.smoke.test.js`, CPU 3D fallback; needs jsdom)
+* Full run: `npm test` (**581 assertions**)
 
-Visual checkpoint: `docs/preview/world.png` (the whole island) and `docs/preview/buildings.png`
-(the building catalogue), both rendered by `tools/render-preview.mjs`.
+Visual checkpoints: `docs/preview/world.png` (whole island), `docs/preview/buildings.png` (building
+catalogue) and `docs/preview/units.png` (five military roles), rendered through the shared CPU
+rasterizer by `tools/render-preview.mjs`.
 
 ## Current Goal
 
-Milestone 5 is complete: the world is no longer a hex board. One continuous terrain surface
-(baked height field, vertex-coloured grass/dirt/rock/sand/snow), instanced 3D forests, 3D rocks and
-resource nodes, ruin and farm props, 15 stylized buildings, sky/sun/fog/atmosphere, animated water,
-wind-swayed trees and a geographic (not hexagonal) territory wash. Still open in the art programme:
-**Phase 6 — better units**, atmosphere polish, and **Phase 9 — reduce UI obstruction**. No new
-gameplay systems until the visual foundation is signed off (standing directive).
+Milestone 5 remains the continuous-world foundation; milestone 6 removes the old hex-shaped world
+fallback. WebGL and CPU rendering now consume the same three.js scene. The software backend draws
+the terrain, sea, instanced scatter, buildings, characters and soft decals with a depth buffer. The
+trade-off is lower internal resolution and no GPU shadow maps / full material shaders. Hexes remain
+only as simulation and picking coordinates. Phase 6 is complete: units now have role-specific
+silhouettes, armour, headgear, shields/weapons and articulated walk/attack animation. Still open:
+atmosphere polish and **Phase 9 — reduce UI obstruction**. No new gameplay systems until the visual
+foundation is signed off (standing directive).
 
 ## Completed Features
 
@@ -96,14 +103,23 @@ gameplay systems until the visual foundation is signed off (standing directive).
 * **Sky, sun, fog and atmosphere (v0.5.0)**: gradient sky dome repainted per season, directional
   sun with shadow mapping, hemisphere ambient light, distance fog for depth, season-driven light
   colour/intensity, snow whiten in winter and a season tint over the whole terrain material.
-* **Territory as geography (v0.5.0)**: ownership is drawn as a desaturated ground wash that follows
-  the terrain with a per-vertex fade and a brighter frontier rim, rebuilt when ownership changes;
-  capture cues are rings draped on the actual ground. No hex outlines anywhere.
-* **Tooling: `tools/render-preview.mjs`** — a software rasteriser that loads the *real* three.js
-  scene (the same code path the game uses, with a fake GL backend) and writes a PNG, so the world
-  can be inspected headlessly. `node tools/render-preview.mjs --out shot.png --distance 16
-  --yaw 0.7 --pitch 0.8 --center player`; `--mode buildings` renders the catalogue (see
-  `docs/preview/`).
+* **Territory and interaction decals (v0.6.0)**: ownership is a desaturated geographic wash with
+  a per-vertex fade and frontier glow. Hover/build/capture feedback is a terrain-draped radial
+  wash; selection markers are circular. No visible hex outlines or hex decals remain.
+* **Phase 6 unit pass (v0.6.0)**: warrior, raider, shield-bearer, scout and warchief use distinct
+  headgear, torso shapes, armour, shields/weapons and scale. Arms and legs pivot independently for
+  a walk cycle; attacks use a weapon lunge. Character meshes remain original procedural geometry.
+* **CPU 3D renderer (`src/raster3d.js`)**: software triangle rasterizer with perspective projection,
+  per-vertex colour/alpha, depth buffer, lighting/fog approximation, texture sampling for procedural
+  maps, order-line/text overlays and terrain LOD. `view.js` selects it when WebGL is unavailable;
+  both backends render the exact same scene graph.
+* **Visual tooling: `tools/render-preview.mjs`** uses that runtime rasterizer to write PNGs from the
+  real scene (no GPU required). `node tools/render-preview.mjs --out shot.png --distance 16
+  --yaw 0.7 --pitch 0.8 --center player`; `--mode buildings` renders the catalogue and `--mode units`
+  renders the five role-specific military models (see `docs/preview/`).
+* **Preview diagnostics**: `tools/serve.mjs` sends `Cache-Control: no-store` and logs method, URL,
+  status, bytes and duration for every request. The `r5-world` top-bar badge is a stable build stamp;
+  its `data-renderer` attribute reports `3d` or `raster3d`.
 * **Northgard-style RTS camera (v0.4.0)**: ~54° downward 3/4 view (clamped 35°–75° so it never
   becomes a flat top-down board), perspective FOV 52°, free orbit (Q/E), tilt (R/F), zoom 7–72
   (wheel/pinch/buttons), pan by drag/minimap/WASD. Pan, zoom, orbit and tilt are eased with a
@@ -117,27 +133,22 @@ gameplay systems until the visual foundation is signed off (standing directive).
   walking from the building to the resource node they exploit, harvesting there with the tool of
   their trade, carrying a load home and starting again. Presentation only — the simulation remains
   authoritative, and the party follows `building.workers` exactly.
-* **Units in 3D (v0.3.0 → still Phase 6 of the art programme)**: units are procedural low-poly
-  humanoids (body, head, arms, legs, weapon, clothing by clan colour) that stand on and walk across
-  the continuous surface, with selection rings, shield walls, projectiles, damage floaters and
-  building scaffolding. Making them *better* characters (distinct silhouettes per unit type,
-  animation) is the next art phase.
-* **Renderer fallback + switch**: WebGL is probed at boot; without it the game silently falls back
-  to the 2D renderer (with a toast explaining why). The pause menu has a
-  "Renderer — 3D / 2D" section to switch at will; switching swaps in a fresh canvas element
-  (a canvas that has served 2D can never host WebGL, and vice versa) while input, HUD and
-  simulation carry on without a reload. Renderer choice persists for the session.
-* **Tooling**: `npm start` static server, `npm test` (engine + save + 3D + jsdom UI suites), debug
-  hook at `window.__northhold` (now also exposes `view` and `setRenderer`).
+* **3D renderer fallback + switch**: WebGL is preferred. Without it, the app constructs the same
+  3D scene and software-rasterizes it through `src/raster3d.js`; the pause menu can switch between
+  WebGL and CPU 3D. A fresh canvas is used for each backend because a canvas cannot change context
+  type after creation. HUD, input and simulation continue without a reload.
+* **Minimap**: the only independent 2D canvas is a compact top-down navigation aid; it uses blended
+  terrain circles and soft ownership washes, not a second world renderer.
+* **Tooling**: `npm start` static server, seven-suite `npm test`, and the debug hook at
+  `window.__northhold` (including `view`, active backend and `setRenderer`).
 
 ## Features In Progress
 
-* **Visual overhaul, Phase 6 (units)** — next up; today's units are the v0.3.0 humanoids.
-* **Phase 7 polish (lighting/atmosphere) and Phase 9 (UI obstruction)** — Phase 7 is partly done
-  (sun/shadows/hemi/fog/sky/water animation/wind), Phase 9 not started.
-* 3D remains presentation-only: the hex simulation, balance and save format are unchanged, and
-  saves made in 2D load in 3D and vice versa. `src/render.js` (2D) survives only as the
-  no-WebGL fallback and is never presented as a way to play.
+* **Phase 7 polish (lighting/atmosphere)** — partly done (fog, sky, animated water and wind); GPU
+  shadow quality remains device-dependent.
+* **Phase 9 (UI obstruction)** — not started.
+* 3D remains presentation-only: the hex simulation, balance and save format are unchanged. A save
+  does not contain renderer state and loads identically with either 3D backend.
 
 ## Next Tasks
 
@@ -147,27 +158,64 @@ gameplay systems until the visual foundation is signed off (standing directive).
    Stag stability — plus clan-specific starting units and a clan passive display in the HUD.
 3. Content: neutral monsters (draugr/wolves), random events, runestones, a third clan.
 4. Audio (WebAudio synthesis, original): ambience, UI feedback, battle cues, off/mute toggle.
-5. ~~Art pass: 3D map, units and buildings~~ ✅ (v0.3.0) — still to come: view-dependent 2D sprite
-   artwork, richer mountain cliffs, more tree variety and per-clan HUD banner emblems.
+5. ~~Art pass: 3D map, units and buildings~~ ✅ — still to come: richer mountain cliffs, more tree
+   variety and per-clan HUD banner emblems.
 6. Balance pass with a headless benchmark script (win-rate and time-to-victory per difficulty).
 
 ## Known Bugs
 
-None known. All five suites pass (549 assertions). Watch list:
+No known gameplay bugs. Current automated run: **581 assertions** across seven suites. Watch list:
 
-* Very long sessions (>40 in-game years) only covered in simulation, not in the browser.
+* Very long sessions (>40 in-game years) are covered by simulation, not a full-length browser run.
 * Touch: two-finger pinch zoom is implemented but only manually verified (jsdom cannot test it).
-* Real GPU drivers cannot be exercised in this sandbox: the 3D pipeline is verified through jsdom
-  with a fake GL backend plus pure-math tests. First load in a real browser is still worth a look.
-* 3D shadow quality varies by device; the renderer already downgrades shadows on small screens.
+* Real GPU drivers are unavailable in this sandbox. The WebGL scene path is exercised through a fake
+  backend; the CPU path is rasterized directly and should still get a real-browser visual check.
+* CPU 3D intentionally renders at a bounded resolution and omits GPU shadow maps; WebGL shadow
+  quality varies by device.
+
+## Visual Acceptance & Diagnosis
+
+Visual sign-off is a required gate before calling the renderer work done. Automated tests can prove the
+scene graph and CPU framebuffer are valid; the final art read still needs a browser check.
+
+### Acceptance checklist
+
+1. Start with `node tools/serve.mjs`; confirm request lines show `GET /`, ES modules and CSS returning
+   `200`, and `Cache-Control: no-store` on both successful and missing-file responses.
+2. The topbar displays **`r5-world`**. `#rendererBadge[data-renderer="3d"]` means WebGL;
+   `data-renderer="raster3d"` means the CPU fallback. Both must show the same continuous island.
+3. In a broad and a close view, the land is one connected height-field surface: no per-tile slabs,
+   no six-sided borders, no hex-shaped hover/build/capture decal. Territory fades as a soft geographic
+   wash; interaction markers fade radially and follow the terrain.
+4. Check a forest edge, lake shore, mountain, building, moving villager and each military role. Units
+   must read as separate 3D characters (silhouette, headgear, weapon/shield and leg/arm motion), not
+   coloured pips. Verify click-picking and camera pan/zoom/orbit in both backends.
+5. For a repeatable headless art check, run `node tools/render-preview.mjs --out /tmp/northhold.png
+   --width 960 --height 540 --distance 30 --center map`; add `--mode buildings` or `--mode units`
+   to inspect the catalogue or role silhouettes. Current examples are in `docs/preview/`.
+
+**Current sign-off:** the shared CPU-rasterized island, building catalogue and five-role unit showcase
+have been generated and visually inspected; automated scene/raster tests also pass. Interactive
+browser checks (especially on a real GPU/WebGL driver) remain an external sign-off gate. The CPU
+fallback is deliberately lower resolution and does not reproduce GPU shadows or every material shader.
+
+### Diagnosis notes
+
+| Symptom | Diagnosis |
+|---|---|
+| Blank or stale world after editing | Check the dev-server request log for module status; successful and 404 responses are `no-store`. Confirm `raster3d.js` loaded and inspect the first console exception. |
+| CPU fallback looks softer than WebGL | Expected bounded internal resolution (max 768×512 / 280k pixels) and no GPU shadow map. Confirm `data-renderer="raster3d"`; this is not a hidden 2D board. |
+| Tile edges return | Regression: world geometry should have one terrain mesh plus the sea bed; inspect hover/build/capture feedback for a six-sided decal. Gameplay hex coordinates remain in `engine.js` only. |
+| Units still read as dots | Check camera distance, `buildUnitMesh` role style, articulated `legL/legR` pivots, and whether `syncUnits` sees movement/attack state. The minimap may still use tiny dots by design. |
+| Picking seems offset | Compare `screenToTile` against the height-field ray march; keep CSS canvas dimensions distinct from the CPU backing-buffer dimensions. |
 
 ## Architecture
 
 ```
-index.html → src/main.js ─┬─ src/view.js      (renderer adapter: 3D ⇄ 2D, one API for everything)
-                          │        ├─ src/render3d.js  (three.js scene, camera rig, picking)
-                          │        │        └─ src/models3d.js (procedural tile/building/unit meshes)
-                          │        └─ src/render.js    (2D canvas world + minimap, fallback)
+index.html → src/main.js ─┬─ src/view.js      (renderer adapter: WebGL ⇄ CPU 3D)
+                          │        ├─ src/render3d.js  (shared three.js scene, camera, picking)
+                          │        │        └─ src/models3d.js (procedural terrain props/building/unit meshes)
+                          │        └─ src/raster3d.js  (CPU triangle rasterizer + soft minimap)
                           ├─ src/input.js    (pointer/keyboard → engine commands, camera)
                           ├─ src/ui.js       (HUD DOM, panels, modals; reads state, sends commands)
                           ├─ src/ai.js       (aiStep(state, dt) — the rival jarl)
@@ -178,8 +226,8 @@ index.html → src/main.js ─┬─ src/view.js      (renderer adapter: 3D ⇄ 
 
 * **The view adapter is the only renderer boundary.** `src/view.js` exposes one surface
   (`draw`, `drawMinimap`, `screenToTile`, `worldToScreen`, `centerOn`, `panBy`, `zoomAt/zoomBy`,
-  `rotateBy`, `tiltBy`, `pickRadius`, `use3D`, `use2D`) and input/UI only ever talk to it, so the
-  3D and 2D renderers are interchangeable and the 2D fallback can never drift out of sync.
+  `rotateBy`, `tiltBy`, `pickRadius`, `use3D`, `useRaster3D`). Both backends render one shared 3D
+  scene; there is no 2D world renderer to drift out of sync.
 * **3D is presentation-only.** `render3d.js` reads `state` and mirrors tiles, buildings, units and
   effects into scene groups; it never mutates the simulation. Unit positions come straight from the
   engine's world coordinates (`u.x`, `u.y`) mapped by `hexTo3D`. Game rules stay in `engine.js`.
@@ -197,9 +245,9 @@ index.html → src/main.js ─┬─ src/view.js      (renderer adapter: 3D ⇄ 
   same ray on every sampled tile centre (2250 samples over five camera angles, including the
   shallowest legal pitch).
 * **Renderer switching swaps the canvas element.** A canvas that has handed out a 2D context cannot
-  create a WebGL context and vice versa, so `view.js` builds the incoming renderer on a brand new
-  canvas and only swaps it in once it succeeds — a failed switch leaves a working renderer alone.
-  Input listeners live on the parent `main` element, so they survive the swap.
+  create a WebGL context and vice versa, so `view.js` builds the incoming renderer on a fresh canvas
+  and swaps it in only after success. A failed switch leaves the current backend working. Input
+  listeners live on parent `main`, so they survive the swap.
 
 * **Engine is DOM-free** and safe to import in Node — that is what makes the simulation tests and
   the long-run balance sweeps possible.
@@ -208,8 +256,9 @@ index.html → src/main.js ─┬─ src/view.js      (renderer adapter: 3D ⇄ 
   `{ ok, reason }`; the UI and AI both call them so rules can never diverge.
 * **State is a single plain object graph** (`state`) with `tiles`, `units`, `clans`, `time`,
   `floaters`, `log`, `toasts`. Units/buildings are mirrored in `unitById` / `buildingsById` maps.
-* **Renderer is stateless per frame**, driven by `draw(ctx, state, canvas, ui, dt)`; UI state lives
-  in `app.ui` (selection, modes, highlights) so the engine never knows about the mouse.
+* **Rendering is presentation-only**: `render3d.draw(state, ui, dt)` mirrors state into the scene;
+  WebGL or `raster3d` renders it. UI state lives in `app.ui` (selection, modes, highlights), so the
+  engine never knows about the mouse.
 * **HUD updates on signatures** — panels/catalog/toasts re-render only when something they display
   changed, keeping the DOM cheap next to the canvas.
 
@@ -218,7 +267,7 @@ index.html → src/main.js ─┬─ src/view.js      (renderer adapter: 3D ⇄ 
 * **Plain ES modules, no bundler, no dependencies.** Runs from any static host; the whole game is
   readable without a build toolchain. jsdom is only needed for the optional UI test.
 * **Hex grid**: axial coordinates (q, r), 6-direction neighbours, O(1) lookup via `tileByKey`.
-  Rendering uses pointy-top hexes at world scale 1 with a single zoom factor.
+  This is simulation/picking data only; world geometry is continuous and the minimap uses soft circles.
 * **Time**: 1 in-game month = 6 real seconds; all rates are "per month", converted with
   `dt / MONTH_SECONDS`. Game speed multiplies dt, and dt is clamped to 0.25 s per step so a
   background tab cannot teleport the simulation.
@@ -235,8 +284,8 @@ index.html → src/main.js ─┬─ src/view.js      (renderer adapter: 3D ⇄ 
   drawing functions without touching rules.
 * **three.js r169 is vendored, not fetched.** `vendor/three.module.min.js` (MIT, license text next
   to it) is imported with a relative ESM specifier. The game must run inside a preview iframe with
-  no network access, so a CDN import is not acceptable; the vendored file is loaded lazily — the
-  2D path never touches it.
+  no external network access, so a CDN import is not acceptable. The CPU backend reuses three.js
+  geometry/camera math but never requests a WebGL context.
 * **Deposits have a kind and an amount, never both in one field.** `tile.deposit` is the remaining
   amount and `tile.depositKind` is `'stone'`/`'iron'` (`depositMax` is the original size). They used
   to be one field, so mining did `'stone' - 1` and quietly made the deposit `NaN` (infinite mines,
@@ -260,26 +309,31 @@ index.html → src/main.js ─┬─ src/view.js      (renderer adapter: 3D ⇄ 
   ore, ruins, farm/log props and animals, as pure data for instancing.
 * `src/buildings3d.js` — **new**: the 15 stylized buildings and their parts (footing, walls, door,
   window, roofGable, shingles, chimney, bannerPole, scaffold).
-* `src/models3d.js` — rewritten around primitives, merging and instancing: tree/rock/ore/ruin/plot
-  variants, deer, villager and unit meshes, `workToolFor`. The old per-tile hex prisms are gone
-  (dead `hexPrismGeometry` deleted).
-* `src/render3d.js` — layers are `terrain/water/scatter/territory/buildings/units/workers/fx`;
-  `buildWorld` rebuilds the surface from signatures, instanced scatter, wind sway, water scroll,
-  season tinting, draped highlights/capture cues, the territory wash (now built on the first frame),
-  a marching height-aware picker over the continuous surface, and a camera whose pan starts eased
-  and is speed-capped.
-* `src/engine.js` / `src/save.js` — deposit fix: kinds live in `depositKind`, amounts in `deposit`
-  (`depositMax` is capacity), so mining depletes deposits instead of poisoning them with `NaN`;
-  saves carry the kind and default it from the terrain.
-* `tools/render-preview.mjs` — **new**: headless PNG renders of the real scene (two-pass
-  transparency, sky background, `--mode buildings`); `npm run preview` regenerates the island shot.
-* `tests/render3d.test.js` — rewritten for the new architecture, extended to **251** tests
-  (continuity at two scales, relief, shore, territory, scatter, models, camera, picking against an
-  independent ray march).
-* `tests/ui.3d.test.js` — ported to the new layers, extended to **76** tests (one island mesh plus a
-  sea bed, no tile columns, per-vertex territory fade, seasonal tint × vertex colour).
-* `docs/preview/` — rendered checkpoints (`world.png`, `buildings.png`), `PROJECT_STATE.md`,
-  `README.md`, `package.json` — v0.5.0.
+* `src/models3d.js` — procedural tree/rock/ore/ruin/plot variants, deer, villagers and Phase 6
+  military units. Unit types now differ in build, armour, headgear, shield/weapon and scale; arm and
+  leg pivots are driven by `render3d.js`.
+* `src/render3d.js` — shared WebGL/CPU scene layers `terrain/water/scatter/territory/buildings/units/
+  workers/fx`; continuous world sync, wind/water/season updates, radial ground washes, height-aware
+  picking and eased RTS camera.
+* `src/raster3d.js` — **new** runtime CPU rasterizer: projected scene triangles, per-vertex colour and
+  alpha, depth buffer, lighting/fog approximation, procedural DataTexture sampling and text/order
+  overlays. Terrain uses a cached stride-2 raster LOD; the backing canvas is bounded for performance.
+* `src/view.js` / `src/input.js` / `src/main.js` / `index.html` — remove the 2D world renderer, default
+  to WebGL or CPU 3D, expose both 3D backends in the pause menu, fix minimap navigation, and show the
+  `r5-world` build stamp plus active backend in `data-renderer`.
+* `src/terrain3d.js` — adds terrain-draped soft radial feedback geometry; the ownership mesh remains
+  a geographic per-vertex wash.
+* `tools/serve.mjs` — no-store headers and one access-log line per request (method/path/status/bytes/
+  duration), with a static-file path check.
+* `tools/render-preview.mjs` — PNG preview of the real scene using the same CPU rasterizer as the
+  browser fallback; `--mode buildings` still renders the catalogue.
+* `tests/render3d.test.js` — **266 assertions** across terrain continuity, coast, territory and soft
+  decals, scatter, model silhouettes, Phase 6 pivots, camera and picking.
+* `tests/raster3d.test.js` — **7 assertions** for framebuffer output, depth ordering and no-WebGL
+  renderer construction; `tests/server.test.js` — **6 assertions** for no-store and request logging.
+* `tests/ui.3d.test.js` — **78 assertions** through the fake GL backend; `tests/ui.smoke.test.js` —
+  **86 assertions** booting the real app through CPU 3D.
+* `docs/preview/` remains the visual checkpoint directory; package and project version are **v0.6.0**.
 
 ## How To Run
 
@@ -288,28 +342,33 @@ index.html → src/main.js ─┬─ src/view.js      (renderer adapter: 3D ⇄ 
 node tools/serve.mjs         # → http://localhost:8080
 
 # test
-npm test                     # engine + save + 3D + UI suites (549 assertions)
-npm run test:engine          # no dependencies needed
-npm run test:3d              # 3D models/camera + jsdom 3D integration
-npm i --no-save jsdom && npm run test:ui
+npm i --no-save --no-package-lock jsdom # optional dependency for browser-DOM suites
+npm test                     # all seven suites (581 assertions)
+npm run test:engine          # headless simulation; no dependencies needed
+npm run test:3d              # geometry, CPU rasterizer and jsdom scene integration
+npm run test:ui              # boots the game through CPU 3D (needs jsdom)
 
-# look at the world without a GPU (writes a PNG)
+# inspect the same CPU rasterizer used by no-WebGL browsers (writes a PNG)
 node tools/render-preview.mjs --out shot.png --distance 16 --yaw 0.7 --pitch 0.8 --center player
 node tools/render-preview.mjs --out village.png --mode buildings --distance 6 --cols 4
+node tools/render-preview.mjs --out units.png --mode units --distance 6
 ```
 
 ## Last Stable Milestone
 
-**v0.5.0 — continuous 3D world (the hex board is gone).** Commit:
-`feat: continuous 3D world — terrain, forests, rocks, buildings, atmosphere` (the deposit-kind fix
-and the territory-wash build fix are folded into it). Verified by **549 assertions** across five
-suites: 90 engine (20-minute headless simulation, all four victory paths, AI robustness), 48
-save/load (exact round trip, byte-identical continuation after a reload), 251 3D tests (height-field
-continuity, relief, coast, materials, scatter, models, camera clamps and easing, picking against an
-independent ray march), 76 jsdom 3D integration tests (one island mesh, sea bed, territory fade,
-seasons, work parties, units on the ground, 900-frame AI run, canvas swap) and 84 jsdom UI tests
-(boot, build, settle, staff, train, save/load, pause menu, renderer switch).
+**v0.6.0 — CPU 3D fallback + Phase 6 units.** The old hex-shaped 2D world renderer (`src/render.js`)
+was deleted. WebGL and CPU backends now render the same scene; no-WebGL browsers retain 3D terrain,
+props, buildings, units, picking and camera controls through `src/raster3d.js`. Territory and
+interaction decals are soft washes, and the five military roles have distinct 3D silhouettes plus
+articulated walk/attack motion. `r5-world` is the visible build stamp; `tools/serve.mjs` disables
+caching and logs requests for visual debugging.
 
-Previous milestones: **v0.4.0 — 3D RTS foundation** (height field, RTS camera, workers);
-**v0.3.0 — full 3D presentation**; **v0.2.0 — save/load + pause menu**; **v0.1.0 — playable
-prototype**.
+Verified by **581 assertions** across seven suites: 90 engine (long-run simulation and victory paths),
+48 save/load (exact round trip and deterministic continuation), 266 terrain/model/camera/picking,
+7 CPU rasterizer, 6 static-server headers/logging, 78 jsdom 3D scene integration, and 86 UI smoke
+checks through the CPU fallback. The manual visual acceptance checklist above remains the final
+browser/GPU sign-off.
+
+Previous milestones: **v0.5.0 — continuous 3D world**; **v0.4.0 — 3D RTS foundation** (height field,
+RTS camera, workers); **v0.3.0 — full 3D presentation**; **v0.2.0 — save/load + pause menu**;
+**v0.1.0 — playable prototype**.
