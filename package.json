@@ -1,0 +1,28 @@
+{
+  "name": "northhold",
+  "version": "0.5.0",
+  "private": true,
+  "description": "Northhold \u2014 a browser real-time strategy game in the spirit of Northgard: settle a continuous 3D island, survive winter, raise a warband and out-fame a rival jarl.",
+  "type": "module",
+  "scripts": {
+    "start": "node tools/serve.mjs",
+    "dev": "node tools/serve.mjs",
+    "test": "node tests/engine.test.js && node tests/save.test.js && node tests/render3d.test.js && node tests/ui.3d.test.js && node tests/ui.smoke.test.js",
+    "test:engine": "node tests/engine.test.js",
+    "test:ui": "node tests/ui.smoke.test.js",
+    "test:save": "node tests/save.test.js",
+    "test:3d": "node tests/render3d.test.js && node tests/ui.3d.test.js",
+    "preview": "node tools/render-preview.mjs --out docs/preview/world.png --distance 30 --yaw 0.6 --pitch 0.9 --center map"
+  },
+  "keywords": [
+    "rts",
+    "game",
+    "canvas",
+    "viking",
+    "browser-game"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}

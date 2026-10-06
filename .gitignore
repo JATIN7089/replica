@@ -1,0 +1,18 @@
+# dependencies
+node_modules
+node_modules/
+.pnpm-store/
+
+# test/tooling output
+coverage/
+dist/
+build/
+out/
+# os / editor
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+# local preview for playwright/jsdom tooling
+tools/**/node_modules/
