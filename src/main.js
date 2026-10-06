@@ -3,7 +3,7 @@
 // ============================================================================
 import * as E from './engine.js';
 import { CLANS, DIFFICULTY } from './data.js';
-import { setupCanvas, draw, drawMinimap, cam, centerOn, screenToWorld } from './render.js';
+import { createView } from './view.js';
 import { attachInput } from './input.js';
 import { createUI } from './ui.js';
 import { aiStep } from './ai.js';
@@ -12,13 +12,18 @@ import {
   downloadSave, readSaveFile, autosave, SAVE_KEY, SAVE_AUTO_KEY,
 } from './save.js';
 
+const stage = document.querySelector('main');
 const canvas = document.getElementById('map');
 const minimap = document.getElementById('minimap');
-const surfaces = setupCanvas(canvas, minimap);
+const view = createView(canvas, minimap);
+const surfaces = view.surfaces;
 
 const app = {
   canvas,
+  stage,
   minimap,
+  view,
+  get mapCanvas() { return view.canvas; },
   state: null,
   smooth: {},
   ui: {
@@ -42,8 +47,8 @@ function setSpeed(n) {
   app.state.time.speed = n;
   app.state.time.paused = false;
   syncSpeedButtons();
-  // cosmetic: slight camera punch so speed changes are felt
-  cam.zoom = Math.max(cam.minZoom, Math.min(cam.maxZoom, cam.zoom * (n > 1 ? 1.012 : 1)));
+  // cosmetic: a slight camera punch so speed changes are felt
+  view.setZoom(view.getZoom() * (n > 1 ? 1.015 : 1));
 }
 function togglePause() {
   if (!app.state) return;
@@ -97,8 +102,8 @@ function adoptState(state, { toast = null, selectHall = true } = {}) {
   ui.showPause(false);
   const th = E.buildingsOf(state, state.playerClan, 'townhall')[0];
   const tile = th ? E.tileById(state, th.tileId) : state.starts[state.playerClan];
-  cam.zoom = window.innerWidth < 720 ? 34 : 46;
-  centerOn(tile.x, tile.y, canvas);
+  view.defaultZoom();
+  view.centerOn(tile.x, tile.y);
   if (selectHall) app.ui.selectedBuildingId = th ? th.id : null;
   state.time.paused = false;
   setSpeed(state.time.speed || 1);
@@ -137,6 +142,7 @@ function refreshContinue() {
   else ui.refreshContinue(null);
 }
 
+syncRendererUI();
 const startChooser = ui.buildStartScreen((cfg) => newGame(cfg));
 document.getElementById('btnStart').onclick = () => newGame(startChooser.get());
 document.getElementById('btnAgain').onclick = () => {
@@ -165,6 +171,7 @@ function openPauseMenu() {
   if (manual) parts.push(`manual save: ${manual.clan}, year ${manual.year}`);
   if (auto) parts.push(`autosave: year ${auto.year}`);
   ui.setSaveStatus(parts.length ? `On this device — ${parts.join(' · ')}` : 'No save on this device yet.');
+  syncRendererUI();
   ui.showPause(true);
 }
 function closePauseMenu() {
@@ -219,6 +226,75 @@ importInput.onchange = async () => {
     importInput.value = '';
   }
 };
+
+// ---------------- camera buttons (touch friendly) ----------------
+function bindHold(id, fn, stepMs = 40) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  let timer = null;
+  const start = (e) => {
+    e.preventDefault();
+    fn();
+    timer = setInterval(fn, stepMs);
+  };
+  const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+  el.addEventListener('pointerdown', start);
+  for (const evt of ['pointerup', 'pointerleave', 'pointercancel']) el.addEventListener(evt, stop);
+  el.addEventListener('click', (e) => e.preventDefault());
+}
+bindHold('btnRotL', () => view.rotateBy(-0.09));
+bindHold('btnRotR', () => view.rotateBy(0.09));
+bindHold('btnZoomIn', () => view.zoomBy(1.06));
+bindHold('btnZoomOut', () => view.zoomBy(0.94));
+document.getElementById('btnCamReset').onclick = () => {
+  if (view.kind === '3d' && view.threeD) {
+    view.threeD.rig.yaw = Math.PI * 0.25;
+    view.threeD.rig.pitch = 0.92;
+  }
+  app.ui.mode = 'select';
+};
+
+// ---------------- renderer switch ----------------
+function setRenderer(kind) {
+  if (kind === '3d') {
+    const r = view.use3D();
+    if (!r.ok) {
+      E.addToast(app.state, `3D unavailable: ${r.reason}`, 'bad');
+      return;
+    }
+    E.addToast(app.state, '3D view enabled', 'good');
+  } else {
+    view.use2D();
+    E.addToast(app.state, 'Classic 2D view', 'good');
+  }
+  view.defaultZoom();
+  const st = app.state;
+  if (st) {
+    const th = E.buildingsOf(st, st.playerClan, 'townhall')[0];
+    const tile = th ? E.tileById(st, th.tileId) : st.starts[st.playerClan];
+    view.centerOn(tile.x, tile.y);
+  }
+  syncRendererUI();
+}
+function syncRendererUI() {
+  const label = document.getElementById('rendererLabel');
+  if (label) {
+    label.textContent = view.kind === '3d' ? '3D' : '2D';
+  }
+  const note = document.getElementById('rendererNote');
+  if (note) {
+    note.textContent = view.kind === '3d'
+      ? 'Rendering the world with WebGL (three.js). Q/E rotate, R/F tilt, wheel zooms.'
+      : `Classic canvas renderer${view.fallbackReason ? ` — ${view.fallbackReason}` : ''}.`;
+  }
+  const to3d = document.getElementById('btnUse3D');
+  const to2d = document.getElementById('btnUse2D');
+  if (to3d) to3d.disabled = view.kind === '3d';
+  if (to2d) to2d.disabled = view.kind === '2d';
+}
+document.getElementById('btnUse3D').onclick = () => setRenderer('3d');
+document.getElementById('btnUse2D').onclick = () => setRenderer('2d');
+app.setRenderer = setRenderer;
 
 document.getElementById('btnPause').onclick = () => togglePause();
 document.getElementById('btnSpeed1').onclick = () => setSpeed(1);
@@ -280,8 +356,8 @@ function frame(now) {
     E.step(st, rawDt);
     input.updateCamera(rawDt);
     updateHighlights();
-    draw(surfaces.ctx, st, canvas, app.ui, rawDt);
-    drawMinimap(surfaces.mctx, st, minimap);
+    view.draw(st, app.ui, rawDt);
+    view.drawMinimap(st);
     ui.update(rawDt);
     // keep the speed buttons honest (auto-pause from altar events)
     acc += rawDt;
@@ -293,6 +369,6 @@ requestAnimationFrame(frame);
 
 // debug hook (used by the headless smoke tests)
 window.__northhold = {
-  app, E, ui, surfaces, newGame, setSpeed, togglePause, loadFromData,
+  app, E, ui, view, surfaces, newGame, setSpeed, togglePause, loadFromData, setRenderer,
   openPauseMenu, closePauseMenu, refreshContinue, save: { saveToStorage, readSaveFromStorage, saveInfo, clearSave, SAVE_KEY, SAVE_AUTO_KEY },
 };

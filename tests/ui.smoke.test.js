@@ -63,7 +63,9 @@ for (const prop of ['clientWidth', 'clientHeight']) {
   });
 }
 const contexts = new Map();
-window.HTMLCanvasElement.prototype.getContext = function () {
+window.HTMLCanvasElement.prototype.getContext = function (kind) {
+  // jsdom really has no WebGL: report that faithfully so the app takes its 2D path
+  if (kind !== '2d') return null;
   if (!contexts.has(this)) contexts.set(this, makeCtxStub(this));
   return contexts.get(this);
 };
@@ -194,7 +196,7 @@ ok(A.ui.mode === 'build' && A.ui.buildType === 'woodcutter', 'clicking a card ar
 ok(A.ui.highlightTiles.size > 0, 'valid tiles are highlighted while building', A.ui.highlightTiles.size);
 const before = E.allBuildings(A.state, 0).length;
 // click on any of the highlighted tiles (converted to screen space)
-const { worldToScreen } = await import(path.join(root, 'src/render.js'));
+const worldToScreen = (x, y) => window.__northhold.view.worldToScreen(x, y);
 const hlTile = E.tileById(A.state, [...A.ui.highlightTiles][0]);
 const p = worldToScreen(hlTile.x, hlTile.y);
 fire(canvas, 'pointerdown', { pointerId: 2, button: 0, clientX: p.x, clientY: p.y, buttons: 1 });
@@ -276,6 +278,44 @@ ok(/Victory/i.test(document.getElementById('goTitle').textContent), 'victory tit
 document.getElementById('btnAgain').click();
 ok(document.getElementById('startScreen').classList.contains('show'), 'play again returns to the start screen');
 
+console.log('\nRenderer & 3D camera');
+{
+  const { view, setRenderer } = window.__northhold;
+  ok(!!view, 'the view adapter is mounted');
+  ok(view.kind === '2d', 'no WebGL in jsdom → the 2D fallback is used', view.kind);
+  ok(!!view.fallbackReason, 'the fallback explains itself', view.fallbackReason);
+  ok(view.screenToTile(640, 360, A.state) != null, 'the fallback picks tiles from screen coordinates');
+  const s3 = setRenderer('3d');
+  runFrames(3);
+  ok(view.kind === '2d', 'asking for 3D without WebGL keeps the working 2D renderer', view.kind);
+  ok(/3D unavailable|WebGL/i.test(document.getElementById('toasts').textContent), 'the player is told why 3D failed');
+  ok(view.use2D().ok, 'switching back to 2D is always safe');
+
+  const before = view.getZoom();
+  view.rotateBy(0.3);
+  view.tiltBy(0.1);
+  ok(true, 'rotate/tilt are safe in 2D (no-ops)');
+  view.zoomBy(1.05);
+  ok(view.getZoom() !== before, 'zoom works through the adapter', `${before} → ${view.getZoom()}`);
+  const centre = view.worldToScreen(A.state.starts[0].x, A.state.starts[0].y);
+  ok(Number.isFinite(centre.x) && Number.isFinite(centre.y), 'worldToScreen returns finite pixels',
+    `kind=${view.kind} canvas=${view.canvas.id} _w=${view.canvas._w} _h=${view.canvas._h} → ${centre.x},${centre.y}`);
+  const ground = view.screenToWorld(centre.x, centre.y);
+  ok(Math.hypot(ground.x - A.state.starts[0].x, ground.y - A.state.starts[0].y) < 0.6,
+    'screenToWorld inverts worldToScreen', `${ground.x.toFixed(2)},${ground.y.toFixed(2)}`);
+
+  // the camera buttons must exist and be wired
+  for (const id of ['btnRotL', 'btnRotR', 'btnZoomIn', 'btnZoomOut', 'btnCamReset']) {
+    ok(!!document.getElementById(id), `${id} exists`);
+  }
+  document.getElementById('btnZoomIn').dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+  document.getElementById('btnZoomIn').dispatchEvent(new window.Event('pointerup', { bubbles: true }));
+  ok(true, 'camera buttons respond to pointer events');
+  document.getElementById('btnCamReset').click();
+  runFrames(3);
+  ok(true, 'camera reset does not throw');
+}
+
 console.log('\nPause menu & save/load');
 {
   // blob URLs for the export path
@@ -293,6 +333,12 @@ console.log('\nPause menu & save/load');
   document.getElementById('btnMenu').click();
   ok(document.getElementById('pauseModal').classList.contains('show'), 'menu button opens the pause menu');
   ok(A.state.time.paused === true, 'opening the menu pauses the game');
+  ok(document.getElementById('rendererLabel').textContent.length > 0, 'pause menu shows the active renderer',
+    document.getElementById('rendererLabel').textContent);
+  {
+    const v = window.__northhold.view;
+    ok(document.getElementById('btnUse3D').disabled === (v.kind === '3d'), 'renderer buttons reflect the state');
+  }
   ok(/year \d+/.test(document.getElementById('pauseInfo').textContent), 'pause menu summarises the game',
     document.getElementById('pauseInfo').textContent);
   runFrames(10);

@@ -3,13 +3,15 @@
 // ============================================================================
 import * as E from './engine.js';
 import { UNITS, BUILDINGS } from './data.js';
-import {
-  cam, screenToTile, screenToWorld, worldToScreen, clampCam, centerOn,
-  drawMinimap,
-} from './render.js';
 
 export function attachInput(app) {
-  const { canvas, minimap } = app;
+  const { minimap, view } = app;
+  // input is bound to the stage, not the canvas: the view may swap canvas
+  // elements when the renderer changes, and the listeners must survive that
+  const canvas = app.stage || app.canvas;
+  const screenToTile = (sx, sy, state) => view.screenToTile(sx, sy, state);
+  const worldToScreen = (x, y, elevation) => view.worldToScreen(x, y, elevation);
+  const centerOn = (x, y) => view.centerOn(x, y);
   const state = () => app.state;
   const ui = app.ui;
   const pointers = new Map();
@@ -17,11 +19,13 @@ export function attachInput(app) {
   let boxSel = null;
   let panning = false;
   let pinchDist = 0;
+  let lastPan = { x: 0, y: 0 };
+  let rotating = null;
   let moved = false;
   const keys = new Set();
 
   const localPos = (e) => {
-    const r = canvas.getBoundingClientRect();
+    const r = view.canvas.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   };
 
@@ -30,7 +34,7 @@ export function attachInput(app) {
     for (const u of state().units) {
       if (filter && !filter(u)) continue;
       const p = worldToScreen(u.x, u.y);
-      const rad = cam.zoom * (UNITS[u.type].hero ? 0.36 : 0.3);
+      const rad = view.pickRadius() * (UNITS[u.type].hero ? 1.15 : 1);
       const d = Math.hypot(p.x - sx, p.y - sy);
       if (d < rad && d < bestD) { best = u; bestD = d; }
     }
@@ -42,7 +46,8 @@ export function attachInput(app) {
     for (const b of t.buildings) {
       if (filter && !filter(b)) continue;
       const p = worldToScreen(t.x, t.y);
-      if (Math.abs(p.x - sx) < cam.zoom * 0.7 && Math.abs(p.y - sy) < cam.zoom * 0.6) return b;
+      const r = view.pickRadius() * 2.1;
+      if (Math.abs(p.x - sx) < r && Math.abs(p.y - sy) < r * 0.85) return b;
     }
     return null;
   }
@@ -144,7 +149,9 @@ export function attachInput(app) {
 
   // --- pointer events
   canvas.addEventListener('pointerdown', (e) => {
-    canvas.setPointerCapture(e.pointerId);
+    // pointer capture belongs to the element under the pointer (the map canvas,
+    // which is an element of the stage that listens for input)
+    try { view.canvas.setPointerCapture?.(e.pointerId); } catch { /* unsupported */ }
     pointers.set(e.pointerId, e);
     const p = localPos(e);
     if (pointers.size === 2) {
@@ -154,13 +161,18 @@ export function attachInput(app) {
       dragStart = null;
       return;
     }
+    if (e.button === 1 && view.kind === '3d' && e.ctrlKey) {
+      rotating = { x: p.x, y: p.y };
+      return;
+    }
     if (e.button === 1 || (e.button === 0 && (e.shiftKey && e.altKey)) || app.spaceDown) {
       panning = true;
-      dragStart = { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
+      lastPan = { x: p.x, y: p.y };
+      dragStart = { x: p.x, y: p.y };
       return;
     }
     if (e.button === 2) return; // context handled below
-    dragStart = { x: p.x, y: p.y, camX: cam.x, camY: cam.y, shift: e.shiftKey, button: e.button };
+    dragStart = { x: p.x, y: p.y, shift: e.shiftKey, button: e.button };
     moved = false;
   });
 
@@ -174,15 +186,20 @@ export function attachInput(app) {
       const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
       if (pinchDist > 0) {
         const factor = d / pinchDist;
-        zoomAt(canvas._w / 2, canvas._h / 2, factor);
+        zoomAt(view.canvas._w / 2, view.canvas._h / 2, factor);
       }
       pinchDist = d;
       return;
     }
+    if (rotating) {
+      view.rotateBy((p.x - rotating.x) * 0.006);
+      view.tiltBy((p.y - rotating.y) * 0.004);
+      rotating = { x: p.x, y: p.y };
+      return;
+    }
     if (panning && dragStart) {
-      cam.x = dragStart.camX + (p.x - dragStart.x);
-      cam.y = dragStart.camY + (p.y - dragStart.y);
-      clampCam(canvas);
+      view.panBy(p.x - lastPan.x, p.y - lastPan.y);
+      lastPan = { x: p.x, y: p.y };
       return;
     }
     if (dragStart && (e.buttons & 1)) {
@@ -201,6 +218,7 @@ export function attachInput(app) {
     const p = localPos(e);
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinchDist = 0;
+    if (rotating) { rotating = null; return; }
     if (panning) { panning = false; dragStart = null; return; }
     if (e.button === 2) return;
     if (boxSel) {
@@ -223,7 +241,7 @@ export function attachInput(app) {
     }
   });
 
-  canvas.addEventListener('pointercancel', () => { pointers.clear(); panning = false; dragStart = null; boxSel = null; });
+  canvas.addEventListener('pointercancel', () => { pointers.clear(); panning = false; rotating = null; dragStart = null; boxSel = null; });
   canvas.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     const p = localPos(e);
@@ -252,14 +270,7 @@ export function attachInput(app) {
     zoomAt(p.x, p.y, e.deltaY < 0 ? 1.12 : 0.89);
   }, { passive: false });
 
-  function zoomAt(sx, sy, factor) {
-    const before = screenToWorld(sx, sy);
-    cam.zoom = Math.max(cam.minZoom, Math.min(cam.maxZoom, cam.zoom * factor));
-    const after = screenToWorld(sx, sy);
-    cam.x += (after.x - before.x) * cam.zoom;
-    cam.y += (after.y - before.y) * cam.zoom;
-    clampCam(canvas);
-  }
+  const zoomAt = (sx, sy, factor) => view.zoomAt(sx, sy, factor);
 
   // --- minimap
   function minimapToWorld(e) {
@@ -300,6 +311,10 @@ export function attachInput(app) {
     if (e.key === '3') app.setSpeed(3);
     if (e.key.toLowerCase() === 'c') { ui.mode = 'colonize'; ui.buildType = null; }
     if (e.key.toLowerCase() === 'm') { ui.mode = 'move'; }
+    if (e.key.toLowerCase() === 'q') view.rotateBy(-0.18);
+    if (e.key.toLowerCase() === 'e') view.rotateBy(0.18);
+    if (e.key.toLowerCase() === 'r') view.tiltBy(0.08);
+    if (e.key.toLowerCase() === 'f') view.tiltBy(-0.08);
     if (e.key.toLowerCase() === 'h') {
       const th = E.buildingsOf(state(), st.playerClan, 'townhall')[0];
       if (th) centerOn(E.tileById(st, th.tileId).x, E.tileById(st, th.tileId).y, canvas);
@@ -317,24 +332,24 @@ export function attachInput(app) {
   window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 
   function updateCamera(dt) {
-    const speed = 900 / cam.zoom * 2.2;
     let dx = 0, dy = 0;
     if (keys.has('w') || keys.has('arrowup')) dy -= 1;
     if (keys.has('s') || keys.has('arrowdown')) dy += 1;
     if (keys.has('a') || keys.has('arrowleft')) dx -= 1;
     if (keys.has('d') || keys.has('arrowright')) dx += 1;
-    if (dx || dy) {
-      const len = Math.hypot(dx, dy) || 1;
-      cam.x += (dx / len) * speed * dt * cam.zoom * 0.6;
-      cam.y += (dy / len) * speed * dt * cam.zoom * 0.6;
-      clampCam(canvas);
-    }
+    if (!dx && !dy) return;
+    const len = Math.hypot(dx, dy) || 1;
+    // speed scales with the zoom level so panning feels the same at any height
+    const speed = view.kind === '3d' ? view.getZoom() * 1.5 : 900 / view.getZoom() * 2.2 * 0.6;
+    view.panBy(-(dx / len) * speed * dt, -(dy / len) * speed * dt);
   }
 
   return {
     updateCamera,
     getBox: () => boxSel,
-    zoomBy: (f) => zoomAt(canvas._w / 2, canvas._h / 2, f),
+    zoomBy: (f) => view.zoomBy(f),
+    rotateBy: (r) => view.rotateBy(r),
+    tiltBy: (r) => view.tiltBy(r),
     centerHome: () => {
       const st = state();
       const th = E.buildingsOf(st, st.playerClan, 'townhall')[0];

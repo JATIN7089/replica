@@ -27,6 +27,13 @@
         <button id="btnSpeed2" title="2x">2×</button>
         <button id="btnSpeed3" title="3x">3×</button>
       </div>
+      <div class="speed cam" role="group" aria-label="camera">
+        <button id="btnRotL" title="Rotate camera left (Q)">⟲</button>
+        <button id="btnRotR" title="Rotate camera right (E)">⟳</button>
+        <button id="btnZoomIn" title="Zoom in">＋</button>
+        <button id="btnZoomOut" title="Zoom out">－</button>
+        <button id="btnCamReset" title="Reset camera">⌂</button>
+      </div>
       <button id="btnMenu" class="ghost" title="Menu (Esc)">☰</button>
       <button id="btnHelp" class="ghost" title="How to play">?</button>
     </div>
@@ -124,6 +131,12 @@
       <button id="btnHelp2" class="ghost">How to play</button>
     </div>
     <input id="importFile" type="file" accept="application/json,.json" hidden />
+    <h3>Renderer — <span id="rendererLabel">3D</span></h3>
+    <p id="rendererNote" class="muted small"></p>
+    <div class="start-actions">
+      <button id="btnUse3D">🧊 Use 3D</button>
+      <button id="btnUse2D">🗺️ Use 2D</button>
+    </div>
     <p id="saveStatus" class="muted small"></p>
   </div>
 </div>
@@ -157,6 +170,7 @@
           <li><b>Right-click</b> to order selected units.</li>
           <li><b>WASD / arrows</b> or drag with middle mouse to pan · <b>wheel</b> to zoom.</li>
           <li><b>H</b> jumps home · <b>Tab</b> cycles your warriors · <b>Space</b> pauses.</li>
+          <li><b>Q/E</b> rotate the 3D camera · <b>R/F</b> tilt · wheel zooms · middle-drag pans.</li>
         </ul>
         <h3>Edge</h3>
         <ul>

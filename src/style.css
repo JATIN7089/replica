@@ -101,6 +101,8 @@ button.primary:hover { background: linear-gradient(180deg, #f4d075, #d2a147); }
 button.ghost { background: transparent; }
 button.big { font-size: 16px; padding: 11px 22px; border-radius: 10px; }
 .speed { display: flex; gap: 3px; }
+.speed.cam button { min-width: 30px; padding: 5px 6px; font-size: 13px; }
+#rendererLabel { color: var(--gold); font-weight: 700; }
 .speed button { min-width: 34px; padding: 5px 7px; }
 
 /* ---------- main ---------- */

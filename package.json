@@ -7,10 +7,11 @@
   "scripts": {
     "start": "node tools/serve.mjs",
     "dev": "node tools/serve.mjs",
-    "test": "node tests/engine.test.js && node tests/save.test.js && node tests/ui.smoke.test.js",
+    "test": "node tests/engine.test.js && node tests/save.test.js && node tests/render3d.test.js && node tests/ui.3d.test.js && node tests/ui.smoke.test.js",
     "test:engine": "node tests/engine.test.js",
     "test:ui": "node tests/ui.smoke.test.js",
-    "test:save": "node tests/save.test.js"
+    "test:save": "node tests/save.test.js",
+    "test:3d": "node tests/render3d.test.js && node tests/ui.3d.test.js"
   },
   "keywords": [
     "rts",

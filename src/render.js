@@ -21,25 +21,48 @@ let snowDrift = 0;
 export const HEX_SIZE = 1;
 
 export function setupCanvas(canvas, minimap) {
-  const ctx = canvas.getContext('2d');
-  const mctx = minimap.getContext('2d');
+  let mapCanvas = canvas;
+  let ctx = canvas.getContext('2d');
+  let mctx = minimap.getContext('2d');
+  let minimapEl = minimap;
+
   function resize() {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const w = canvas.clientWidth || canvas.parentElement.clientWidth;
-    const h = canvas.clientHeight || canvas.parentElement.clientHeight;
-    canvas.width = Math.floor(w * dpr);
-    canvas.height = Math.floor(h * dpr);
+    const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+    const w = mapCanvas.clientWidth || (mapCanvas.parentElement && mapCanvas.parentElement.clientWidth) || 960;
+    const h = mapCanvas.clientHeight || (mapCanvas.parentElement && mapCanvas.parentElement.clientHeight) || 600;
+    mapCanvas.width = Math.floor(w * dpr);
+    mapCanvas.height = Math.floor(h * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    canvas._w = w; canvas._h = h;
-    minimap.width = Math.floor(minimap.clientWidth * dpr);
-    minimap.height = Math.floor(minimap.clientHeight * dpr);
-    mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    minimap._w = minimap.clientWidth;
-    minimap._h = minimap.clientHeight;
+    mapCanvas._w = w;
+    mapCanvas._h = h;
+    if (minimapEl) {
+      minimapEl.width = Math.floor(minimapEl.clientWidth * dpr);
+      minimapEl.height = Math.floor(minimapEl.clientHeight * dpr);
+      mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      minimapEl._w = minimapEl.clientWidth;
+      minimapEl._h = minimapEl.clientHeight;
+    }
   }
+
+  /** point the surface at a new canvas element (used when switching renderers) */
+  function rebind(nextCanvas) {
+    mapCanvas = nextCanvas;
+    ctx = nextCanvas.getContext('2d');
+    resize();
+  }
+
   resize();
   window.addEventListener('resize', resize);
-  return { ctx, mctx, minimap, resize, canvas };
+
+  const surfaces = {
+    resize,
+    rebind,
+    get canvas() { return mapCanvas; },
+    get ctx() { return ctx; },
+    get mctx() { return mctx; },
+    get minimap() { return minimapEl; },
+  };
+  return surfaces;
 }
 
 export function worldToScreen(wx, wy) {
