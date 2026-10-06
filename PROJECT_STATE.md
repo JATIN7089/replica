@@ -251,24 +251,35 @@ index.html → src/main.js ─┬─ src/view.js      (renderer adapter: 3D ⇄ 
 
 ## Files/Systems Modified Recently
 
-* `src/models3d.js` — **3D foundation**: `tileElevation`/`worldToTile`/`elevationAt` height field,
-  `BASE_Y`/`WATER_LEVEL`, columns extruded to their own elevation, decorations on the surface, and
-  the new villager (`buildVillagerMesh`) + `workToolFor` for work parties.
-* `src/render3d.js` — **RTS camera**: `rigStep`/`rigGroundY` smoothing, FOV 52°, pitch clamped to a
-  3/4 view, marching height-aware `pickTileFromScreen`, elevation-aware placement of every object,
-  and the `workers` layer (work parties walking to resource nodes).
-* `src/ai.js` — jarl economy rebuilt around waves (food → barracks → market → houses → producers),
-  stone reserved for the next stone-hungry building, food targets that stop growing when the stores
-  are deep, colonisation that leads when cramped, and `aiPlan()` for diagnosis.
-* `src/engine.js` — recruiting arms an existing villager instead of raising population.
-* `src/input.js` / `src/main.js` / `src/view.js` — camera keys and buttons, renderer switch, canvas
-  swap and the adapter API (from v0.3.0, unchanged this milestone).
-* `tests/render3d.test.js` — extending to 102: height field, RTS camera (pitch/FOV/smoothing),
-  occlusion-aware picking, villager/work-tool models.
-* `tests/ui.3d.test.js` — extending to 72: terrain relief, buildings on their tile surface, work
-  parties leaving/returning/home-again, units following the ground, mountain picking.
-* `tests/engine.test.js` — 90 tests including the new recruiting rule.
-* `README.md`, `PROJECT_STATE.md`, `package.json` — 3D foundation, camera and worker docs.
+* `src/terrain3d.js` — **new**: the continuous world. Baked height field (`heightFieldFor`,
+  `terrainHeightAt`, `FIELD_STEP`), `tileElevation`/`worldToTile`/`mapExtent`, the terrain mesh
+  (vertex-coloured, hollow AO, detail map, flattened building pads), animated water, draped
+  depth-tinted sea bed, geographic territory wash, `drapeGeometry`, procedural textures, and the
+  signatures the renderer rebuilds the world on.
+* `src/scatter3d.js` — **new**: deterministic clustered placement of trees (with saplings), rocks,
+  ore, ruins, farm/log props and animals, as pure data for instancing.
+* `src/buildings3d.js` — **new**: the 15 stylized buildings and their parts (footing, walls, door,
+  window, roofGable, shingles, chimney, bannerPole, scaffold).
+* `src/models3d.js` — rewritten around primitives, merging and instancing: tree/rock/ore/ruin/plot
+  variants, deer, villager and unit meshes, `workToolFor`. The old per-tile hex prisms are gone
+  (dead `hexPrismGeometry` deleted).
+* `src/render3d.js` — layers are `terrain/water/scatter/territory/buildings/units/workers/fx`;
+  `buildWorld` rebuilds the surface from signatures, instanced scatter, wind sway, water scroll,
+  season tinting, draped highlights/capture cues, the territory wash (now built on the first frame),
+  a marching height-aware picker over the continuous surface, and a camera whose pan starts eased
+  and is speed-capped.
+* `src/engine.js` / `src/save.js` — deposit fix: kinds live in `depositKind`, amounts in `deposit`
+  (`depositMax` is capacity), so mining depletes deposits instead of poisoning them with `NaN`;
+  saves carry the kind and default it from the terrain.
+* `tools/render-preview.mjs` — **new**: headless PNG renders of the real scene (two-pass
+  transparency, sky background, `--mode buildings`); `npm run preview` regenerates the island shot.
+* `tests/render3d.test.js` — rewritten for the new architecture, extended to **251** tests
+  (continuity at two scales, relief, shore, territory, scatter, models, camera, picking against an
+  independent ray march).
+* `tests/ui.3d.test.js` — ported to the new layers, extended to **76** tests (one island mesh plus a
+  sea bed, no tile columns, per-vertex territory fade, seasonal tint × vertex colour).
+* `docs/preview/` — rendered checkpoints (`world.png`, `buildings.png`), `PROJECT_STATE.md`,
+  `README.md`, `package.json` — v0.5.0.
 
 ## How To Run
 
@@ -289,17 +300,16 @@ node tools/render-preview.mjs --out village.png --mode buildings --distance 6 --
 
 ## Last Stable Milestone
 
-**v0.4.0 — 3D RTS foundation and Northgard-style camera.** Commits:
-`feat: establish 3D RTS foundation and Northgard-style camera` and
-`fix: jarl economy — stone budgeting, a war chest and working villagers`.
-Verified by 394 assertions across five suites: 90 engine (20-minute headless simulation, all four
-victory paths, recruiting rule, AI robustness), 48 save/load (exact round trip and byte-identical
-continuation after a reload), 102 3D model/camera/picking tests (height field, 3/4 camera clamps and
-smoothing, 1345/1345 visible tile centres picked correctly), 72 jsdom 3D integration tests (real app
-+ fake GL backend: relief, buildings on the surface, work parties round-tripping to resource nodes,
-units following the ground, mountain picking, 900-frame AI run, disposal, canvas swap) and 82 jsdom
-UI tests (boots the app, renders, builds, settles, staffs jobs, trains, saves, loads, exports,
-imports, pause menu, renderer switching, game over overlay).
+**v0.5.0 — continuous 3D world (the hex board is gone).** Commit:
+`feat: continuous 3D world — terrain, forests, rocks, buildings, atmosphere` (the deposit-kind fix
+and the territory-wash build fix are folded into it). Verified by **549 assertions** across five
+suites: 90 engine (20-minute headless simulation, all four victory paths, AI robustness), 48
+save/load (exact round trip, byte-identical continuation after a reload), 251 3D tests (height-field
+continuity, relief, coast, materials, scatter, models, camera clamps and easing, picking against an
+independent ray march), 76 jsdom 3D integration tests (one island mesh, sea bed, territory fade,
+seasons, work parties, units on the ground, 900-frame AI run, canvas swap) and 84 jsdom UI tests
+(boot, build, settle, staff, train, save/load, pause menu, renderer switch).
 
-Previous milestones: **v0.3.0 — full 3D presentation**; **v0.2.0 — save/load + pause menu**;
-**v0.1.0 — playable prototype**.
+Previous milestones: **v0.4.0 — 3D RTS foundation** (height field, RTS camera, workers);
+**v0.3.0 — full 3D presentation**; **v0.2.0 — save/load + pause menu**; **v0.1.0 — playable
+prototype**.
