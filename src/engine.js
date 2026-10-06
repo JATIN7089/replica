@@ -17,13 +17,17 @@ export const DIRS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
 // --- RNG --------------------------------------------------------------------
 export function mulberry32(seed) {
   let a = seed >>> 0;
-  return function () {
+  const fn = function () {
     a = (a + 0x6d2b79f5) >>> 0;
     let t = a;
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+  // snapshot/restore let a saved game resume the exact same timeline
+  fn.snapshot = () => a;
+  fn.restore = (value) => { a = (value >>> 0); };
+  return fn;
 }
 export function pick(arr, rng) { return arr[Math.floor(rng() * arr.length) % arr.length]; }
 export function shuffled(arr, rng) {
@@ -254,7 +258,7 @@ function createClan(state, id, clanId, isAI) {
     growth: 0,
     prodMul: isAI ? diff.prod : 1,
     dead: false,
-    ai: { timer: 2, mode: 'build', targetTile: null, rallyTile: null, seen: Math.random() },
+    ai: { timer: 2, mode: 'build', targetTile: null, rallyTile: null },
   };
 }
 

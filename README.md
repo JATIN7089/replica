@@ -37,7 +37,7 @@ Then: pick a clan, pick a difficulty, hit **Raise the banner**.
 | Enemy AI | ✅ | A rival jarl that expands, staffs jobs, chases deposits, builds a settlement, trains a warband and attacks. Three difficulties (Thrall/Karl/Jarl). |
 | Blessings | ✅ | Lore → Altar → choose 1 of 3 permanent blessings (12 available, up to 5 per game). |
 | Victory | ✅ | Fame (300), Trade (2200 krowns with a Market/Trading Post), Domination (burn their Town Hall), or highest fame after 9 years. |
-| Save/load | ⏳ | Not yet — next milestone (roadmap below). |
+| Save/load | ✅ | localStorage save + autosave every in-game year, JSON export/import, continue from the start screen, pause menu. |
 | Audio | ⏳ | Not yet. |
 
 ## Controls
@@ -52,6 +52,7 @@ Then: pick a clan, pick a difficulty, hit **Raise the banner**.
 | Zoom | Mouse wheel, pinch, or the zoom buttons |
 | Jump home | `H` · Cycle warriors: `Tab` · Pause: `Space` · Cancel: `Esc` |
 | Settle mode | `C` · Move mode: `M` · Speeds: `1` `2` `3` |
+| Pause menu | `Esc` (twice if something is selected) or the ☰ button — save, load, export, import, restart |
 
 ## Project layout
 
@@ -63,10 +64,12 @@ src/ai.js             the rival jarl's brain
 src/render.js         canvas renderer: terrain art, territories, units, effects, minimap
 src/input.js          pointer/keyboard/minimap input, camera, orders
 src/ui.js             HUD: resource bar, contextual panels, build catalog, modals
-src/main.js           bootstrap + game loop glue (debug hook on window.__northhold)
+src/main.js           bootstrap + game loop glue, pause menu, autosave (debug hook on window.__northhold)
+src/save.js           serialise/deserialise the whole state, localStorage slots, file export/import
 tools/serve.mjs       dependency-free static server
 tests/engine.test.js  84 simulation tests (map, economy, seasons, combat, victory, AI, determinism)
-tests/ui.smoke.test.js 39 jsdom tests that boot the real app and drive it
+tests/save.test.js    48 save/load tests (round trip, exact reload determinism, bad input)
+tests/ui.smoke.test.js 62 jsdom tests that boot the real app and drive it
 ```
 
 ## Tests
@@ -85,7 +88,7 @@ collapse over ~20 minutes of play) and determinism for a fixed seed.
 ## Roadmap
 
 1. ~~Playable prototype: map, economy, workers, buildings, combat, AI, UI~~ ✅
-2. Save/load (localStorage + JSON export), then pause-menu polish
+2. ~~Save/load (localStorage + JSON export) and pause menu~~ ✅
 3. Clans differentiated by more than modifiers (Raven scouting, Wolf aggression) — done partly
 4. More content: events, runestones, neutral monsters, a 3rd/4th clan, larger maps
 5. Audio: ambient wind/waves, UI clicks, battle cues (WebAudio, original synthesis)

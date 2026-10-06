@@ -1,6 +1,6 @@
 # PROJECT_STATE
 
-_Last updated: 2026-10-06 (session 1)_
+_Last updated: 2026-10-06 (session 1, milestone 2)_
 
 ## Project State
 
@@ -8,16 +8,19 @@ _Last updated: 2026-10-06 (session 1)_
 HTML5 canvas, **zero runtime dependencies**, no build step. Served statically. Original code/art;
 no Northgard assets are used.
 
-Current version: **v0.1.0 — playable single-player prototype (vs. one AI jarl)**.
+Current version: **v0.2.0 — playable prototype + save/load + pause menu**.
 
 * Engine suite: **84/84 passing** (`node tests/engine.test.js`)
-* UI smoke suite: **39/39 passing** (`node tests/ui.smoke.test.js`, needs jsdom)
+* Save/load suite: **48/48 passing** (`node tests/save.test.js`)
+* UI smoke suite: **62/62 passing** (`node tests/ui.smoke.test.js`, needs jsdom)
+* Full run: `npm test` (194 assertions)
 
 ## Current Goal
 
 Milestone 1 is complete: a playable prototype covering the full core loop
 (map → settle → work → build → survive winter → train → fight → win).
-Next goal: **save/load + settings**, then deeper clan differentiation and content.
+Next goal: **clan differentiation + content** (clan-specific passives and starts, neutral monsters,
+events), then audio.
 
 ## Completed Features
 
@@ -53,17 +56,22 @@ Next goal: **save/load + settings**, then deeper clan differentiation and conten
 * **UI/UX**: start screen (clan + difficulty), HUD resource chips with rate deltas, contextual
   side panel (building / warband / overview + tile inspector), build catalog, orders bar, event
   log, toasts, minimap, help and blessing modals, mobile layout breakpoints.
-* **Tooling**: `npm start` static server, `npm test` (engine + jsdom UI suites), debug hook at
-  `window.__northhold`.
+* **Save/load**: versioned JSON serialisation of the full simulation (tiles, buildings, units,
+  clans, AI memory, time, log, RNG state, start tiles) into localStorage + file export/import;
+  autosave every in-game year; pause menu (`Esc`/☰) with save/load/export/import/restart; the start
+  screen offers "Continue" when a save exists. Derived maps are rebuilt on load, and because the
+  RNG state is stored a reloaded game continues *identically* (tested).
+* **Tooling**: `npm start` static server, `npm test` (engine + save + jsdom UI suites), debug hook
+  at `window.__northhold`.
 
 ## Features In Progress
 
-* None half-finished. Save/load is the next feature to start.
+* None half-finished.
 
 ## Next Tasks
 
-1. Save/load: serialize `state` to JSON in localStorage + export/import file; pause menu with
-   save/load/restart; versioned save format.
+1. ~~Save/load: JSON state serialisation, localStorage + file export/import, pause menu,
+   versioned format~~ ✅ (v2 format; `src/save.js`)
 2. Clan differentiation beyond modifiers: Raven scouting/coastal bonuses, Wolf aggression,
    Stag stability — plus clan-specific starting units and a clan passive display in the HUD.
 3. Content: neutral monsters (draugr/wolves), random events, runestones, a third clan.
@@ -86,6 +94,7 @@ index.html → src/main.js ─┬─ src/render.js   (canvas world + minimap, no
                           ├─ src/input.js    (pointer/keyboard → engine commands, camera)
                           ├─ src/ui.js       (HUD DOM, panels, modals; reads state, sends commands)
                           ├─ src/ai.js       (aiStep(state, dt) — the rival jarl)
+                          ├─ src/save.js     (serialise/deserialise state, storage, files)
                           └─ src/engine.js   (pure simulation: createGame/step + exported commands)
                                    └─ src/data.js (all tunable constants & definitions)
 ```
@@ -131,8 +140,15 @@ index.html → src/main.js ─┬─ src/render.js   (canvas world + minimap, no
 * `src/ai.js` — rewritten worker assignment, population-scaled building plan, deposit-seeking
   expansion, famine handling, training gate.
 * `src/render.js` — off-map border crash fix, capture marker cleanup.
-* `tests/engine.test.js`, `tests/ui.smoke.test.js` — new suites.
-* `README.md`, `PROJECT_STATE.md`, `package.json`, `.gitignore`, `tools/serve.mjs` — added.
+* `src/save.js` — **new**: v2 save format, localStorage slots (`northhold.save.v1`,
+  `northhold.autosave.v1`), file export/import, save metadata.
+* `src/main.js` — `adoptState()` (shared by new game and load), pause menu wiring, autosave,
+  `escapePressed()` chain, extended debug hook.
+* `src/ui.js` / `index.html` / `src/style.css` — pause menu markup/styles, continue button,
+  save status line, `showPause`/`refreshContinue`/`setSaveStatus`/`pauseSummary`.
+* `src/engine.js` — RNG gained `snapshot()`/`restore()` (deterministic reloads).
+* `tests/save.test.js` — **new** suite; `tests/ui.smoke.test.js` extended with 23 save/pause checks.
+* `README.md`, `PROJECT_STATE.md`, `package.json` — updated.
 
 ## How To Run
 
@@ -148,7 +164,10 @@ npm i --no-save jsdom && npm run test:ui
 
 ## Last Stable Milestone
 
-**v0.1.0 — playable prototype.** Tag/commit: first `feat:` commit on `arena/c4b5c775-replica`.
-Verified by 84 engine tests (including a 20-minute headless simulation with no NaN, no economic
-collapse, all four victory paths) and 39 jsdom tests that boot the real app, render frames, build,
-settle, assign workers, train a unit and show the game-over overlay.
+**v0.2.0 — save/load + pause menu.** Commit: `feat: save/load (localStorage + file), pause menu
+and autosave`. Verified by 194 assertions across three suites: 84 engine tests (20-minute headless
+simulation, all four victory paths, AI robustness), 48 save/load tests (exact round trip and
+byte-identical continuation after a reload) and 62 jsdom UI tests (boots the app, renders, builds,
+settles, staffs jobs, trains, saves, loads, exports, imports, pause menu, game over overlay).
+
+Previous milestone: **v0.1.0 — playable prototype** (first `feat:` commit).

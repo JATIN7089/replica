@@ -30,6 +30,11 @@ export function createUI(app) {
     log: $('log'),
     blessingModal: $('blessingModal'),
     blessingChoices: $('blessingChoices'),
+    pause: $('pauseModal'),
+    pauseInfo: $('pauseInfo'),
+    saveStatus: $('saveStatus'),
+    continueBtn: $('btnContinue'),
+    continueInfo: $('continueInfo'),
     gameOver: $('gameOver'),
     goTitle: $('goTitle'),
     goText: $('goText'),
@@ -573,9 +578,39 @@ export function createUI(app) {
     resetSignatures() {
       panelSig = catalogSig = ordersSig = toastSig = logSig = blessingSig = overSig = '';
     },
-    showHelp(show = true) { nodes.help.classList.toggle('show', show); },
+    showHelp(show = true) {
+      nodes.help.classList.toggle('show', show);
+      if (show) nodes.pause.classList.remove('show');
+    },
+    showPause(show = true) {
+      nodes.pause.classList.toggle('show', show);
+      if (show) nodes.help.classList.remove('show');
+    },
+    isPauseOpen() { return nodes.pause.classList.contains('show'); },
+    isHelpOpen() { return nodes.help.classList.contains('show'); },
+    /** brighten the start screen when a save file is waiting */
+    refreshContinue(info) {
+      if (!nodes.continueBtn) return;
+      nodes.continueBtn.hidden = !info;
+      if (info) {
+        nodes.continueInfo.textContent = ` — ${info.clan}, year ${info.year}, ${info.difficulty}${info.auto ? ' (autosave)' : ''}`;
+      }
+    },
+    setSaveStatus(msg, kind = '') {
+      nodes.saveStatus.textContent = msg || '';
+      nodes.saveStatus.className = 'muted small ' + (kind ? 'status-' + kind : '');
+    },
+    /** text describing the current game, shown in the pause menu */
+    pauseSummary(state) {
+      const clan = state.clans[state.playerClan];
+      const season = E.seasonOf(state);
+      return `${clan.name} · year ${E.yearOf(state)}, ${season.name} · `
+        + `${Math.round(clan.fame)} fame · ${E.totalPop(state, clan)}/${E.popCap(state, clan)} pop · `
+        + `${state.tiles.filter((t) => t.owner === state.playerClan).length} tiles`;
+    },
     hideModals() {
       nodes.help.classList.remove('show');
+      nodes.pause.classList.remove('show');
     },
   };
 }

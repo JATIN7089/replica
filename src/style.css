@@ -276,7 +276,12 @@ main { position: relative; flex: 1 1 auto; overflow: hidden; }
 .choice .d { color: var(--muted); font-size: 12px; margin-top: 5px; line-height: 1.45; }
 .choice .b { color: #d9bd77; font-size: 12px; margin-top: 6px; }
 .swatch { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
-.start-actions { display: flex; gap: 10px; justify-content: center; margin-top: 18px; flex-wrap: wrap; }
+.start-actions { display: flex; gap: 10px; justify-content: center; margin-top: 14px; flex-wrap: wrap; }
+#continueInfo { font-weight: 500; opacity: 0.85; font-size: 13px; }
+#pauseInfo { min-height: 1.2em; }
+#saveStatus.mini { margin-top: 8px; }
+.status-ok { color: var(--good); }
+.status-bad { color: var(--bad); }
 .help-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin: 12px 0; font-size: 13px; }
 .stats div { display: flex; justify-content: space-between; border-bottom: 1px dashed rgba(255,255,255,0.12); padding-bottom: 3px; }

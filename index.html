@@ -27,6 +27,7 @@
         <button id="btnSpeed2" title="2x">2×</button>
         <button id="btnSpeed3" title="3x">3×</button>
       </div>
+      <button id="btnMenu" class="ghost" title="Menu (Esc)">☰</button>
       <button id="btnHelp" class="ghost" title="How to play">?</button>
     </div>
   </header>
@@ -79,6 +80,7 @@
 
     <div class="start-actions">
       <button id="btnStart" class="primary big">Raise the banner ⚔️</button>
+      <button id="btnContinue" class="primary big" hidden>📂 Continue<span id="continueInfo"></span></button>
       <button id="btnHowTo" class="ghost">How to play</button>
     </div>
   </div>
@@ -102,6 +104,27 @@
     <div class="start-actions">
       <button id="btnAgain" class="primary">Play again</button>
     </div>
+  </div>
+</div>
+
+<!-- Pause menu -->
+<div id="pauseModal" class="overlay">
+  <div class="overlay-card">
+    <h2>⏸ Paused</h2>
+    <p id="pauseInfo" class="muted"></p>
+    <div class="start-actions">
+      <button id="btnResume" class="primary">▶ Resume</button>
+      <button id="btnSave">💾 Save game</button>
+      <button id="btnLoad">📂 Load save</button>
+    </div>
+    <div class="start-actions">
+      <button id="btnExport" class="ghost">⬇ Export to file</button>
+      <button id="btnImport" class="ghost">⬆ Import from file</button>
+      <button id="btnRestart" class="ghost">↻ Restart</button>
+      <button id="btnHelp2" class="ghost">How to play</button>
+    </div>
+    <input id="importFile" type="file" accept="application/json,.json" hidden />
+    <p id="saveStatus" class="muted small"></p>
   </div>
 </div>
 

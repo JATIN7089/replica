@@ -287,10 +287,13 @@ export function attachInput(app) {
     const st = state();
     if (e.key === ' ') { e.preventDefault(); app.togglePause(); }
     if (e.key === 'Escape') {
-      ui.mode = 'select'; ui.buildType = null;
-      ui.selectedBuildingId = null;
-      ui.selectedUnits = new Set();
-      app.closeModals && app.closeModals();
+      if (app.escapePressed) app.escapePressed();
+      else {
+        ui.mode = 'select'; ui.buildType = null;
+        ui.selectedBuildingId = null;
+        ui.selectedUnits = new Set();
+        app.closeModals && app.closeModals();
+      }
     }
     if (e.key === '1') app.setSpeed(1);
     if (e.key === '2') app.setSpeed(2);

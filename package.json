@@ -2,16 +2,23 @@
   "name": "northhold",
   "version": "0.1.0",
   "private": true,
-  "description": "Northhold — a browser real-time strategy game in the spirit of Northgard: settle a hex map, survive winter, raise a warband and out-fame a rival jarl.",
+  "description": "Northhold \u2014 a browser real-time strategy game in the spirit of Northgard: settle a hex map, survive winter, raise a warband and out-fame a rival jarl.",
   "type": "module",
   "scripts": {
     "start": "node tools/serve.mjs",
     "dev": "node tools/serve.mjs",
-    "test": "node tests/engine.test.js && node tests/ui.smoke.test.js",
+    "test": "node tests/engine.test.js && node tests/save.test.js && node tests/ui.smoke.test.js",
     "test:engine": "node tests/engine.test.js",
-    "test:ui": "node tests/ui.smoke.test.js"
+    "test:ui": "node tests/ui.smoke.test.js",
+    "test:save": "node tests/save.test.js"
   },
-  "keywords": ["rts", "game", "canvas", "viking", "browser-game"],
+  "keywords": [
+    "rts",
+    "game",
+    "canvas",
+    "viking",
+    "browser-game"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=18"

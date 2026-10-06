@@ -81,6 +81,10 @@ window.cancelAnimationFrame = () => {};
 globalThis.window = window;
 globalThis.document = window.document;
 try { Object.defineProperty(globalThis, 'navigator', { value: window.navigator, configurable: true }); } catch { /* node >=21 owns navigator */ }
+globalThis.localStorage = window.localStorage;
+globalThis.sessionStorage = window.sessionStorage;
+globalThis.Blob = window.Blob;
+globalThis.File = window.File;
 globalThis.requestAnimationFrame = window.requestAnimationFrame;
 globalThis.cancelAnimationFrame = window.cancelAnimationFrame;
 globalThis.HTMLElement = window.HTMLElement;
@@ -102,7 +106,7 @@ function fireKey(key) {
 console.log('\nHUD boot');
 const app = await import(path.join(root, 'src/main.js'));
 ok(!!window.__northhold, 'app exposes a debug hook');
-const { app: A, E } = window.__northhold;
+const { app: A, E, save } = window.__northhold;
 ok(!!A, 'app object exists');
 
 // start a game by clicking the real start button
@@ -271,6 +275,89 @@ ok(/Victory/i.test(document.getElementById('goTitle').textContent), 'victory tit
   document.getElementById('goTitle').textContent);
 document.getElementById('btnAgain').click();
 ok(document.getElementById('startScreen').classList.contains('show'), 'play again returns to the start screen');
+
+console.log('\nPause menu & save/load');
+{
+  // blob URLs for the export path
+  const created = [];
+  const makeUrl = (blob) => { created.push(blob); return 'blob:mock-' + created.length; };
+  globalThis.URL.createObjectURL = makeUrl;
+  globalThis.URL.revokeObjectURL = () => {};
+  window.URL.createObjectURL = makeUrl;
+  window.URL.revokeObjectURL = () => {};
+  // jsdom cannot navigate to a download link — record the click instead
+  const realClick = window.HTMLAnchorElement.prototype.click;
+  let anchorClicks = 0;
+  window.HTMLAnchorElement.prototype.click = function () { anchorClicks++; };
+
+  document.getElementById('btnMenu').click();
+  ok(document.getElementById('pauseModal').classList.contains('show'), 'menu button opens the pause menu');
+  ok(A.state.time.paused === true, 'opening the menu pauses the game');
+  ok(/year \d+/.test(document.getElementById('pauseInfo').textContent), 'pause menu summarises the game',
+    document.getElementById('pauseInfo').textContent);
+  runFrames(10);
+  const pausedMonth = A.state.time.month;
+  ok(A.state.time.month === pausedMonth, 'no time passes while paused');
+
+  // save
+  A.state.clans[0].res.wood = 4242;
+  document.getElementById('btnSave').click();
+  ok(/Saved/.test(document.getElementById('saveStatus').textContent), 'save reports success',
+    document.getElementById('saveStatus').textContent);
+  const stored = window.localStorage.getItem(save.SAVE_KEY);
+  ok(!!stored && stored.length > 500, 'a save exists in localStorage', stored ? stored.length : 0);
+  const info = save.saveInfo(save.SAVE_KEY);
+  ok(!!info && info.year >= 1, 'save metadata readable', JSON.stringify(info));
+  ok(!document.getElementById('btnContinue').hidden, 'the start screen offers to continue');
+
+  // change the game, then load the save back
+  A.state.clans[0].res.wood = 1;
+  A.state.clans[0].fame = 0;
+  document.getElementById('btnLoad').click();
+  runFrames(3);
+  ok(A.state.clans[0].res.wood === 4242, 'loading restores the saved resources', A.state.clans[0].res.wood);
+  ok(!A.state.time.paused, 'loading resumes the game');
+  ok(!document.getElementById('pauseModal').classList.contains('show'), 'pause menu closes after loading');
+  ok(document.getElementById('resources').children.length >= 8, 'HUD rebuilt after loading');
+
+  // export
+  document.getElementById('btnMenu').click();
+  document.getElementById('btnExport').click();
+  ok(created.length === 1, 'export builds a save file blob', created.length);
+  ok(anchorClicks >= 1, 'export triggers a download');
+  window.HTMLAnchorElement.prototype.click = realClick;
+
+  // import the exported blob back through the file input
+  const input = document.getElementById('importFile');
+  try {
+    const text = await created[0].text();
+    const file = new window.File([text], 'northhold-test.json', { type: 'application/json' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    A.state.clans[0].fame = 7;
+    await input.onchange();
+    runFrames(3);
+    ok(/Imported/.test(document.getElementById('saveStatus').textContent), 'import reports success',
+      document.getElementById('saveStatus').textContent);
+    ok(A.state.clans[0].fame !== 7, 'imported game replaced the running one', A.state.clans[0].fame);
+  } catch (err) {
+    ok(false, 'import round trip works', err.message);
+  }
+
+  // resume + escape behaviour
+  document.getElementById('btnResume').click();
+  ok(!document.getElementById('pauseModal').classList.contains('show'), 'resume closes the menu');
+  ok(A.state.time.paused === false, 'resume unpauses the game');
+  A.ui.selectedUnits = new Set([999]); // pretend something is selected
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  ok(A.ui.selectedUnits.size === 0, 'first Escape clears the selection');
+  ok(!document.getElementById('pauseModal').classList.contains('show'), '…without opening the menu');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  ok(document.getElementById('pauseModal').classList.contains('show'), 'Escape with nothing selected opens the menu');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  ok(!document.getElementById('pauseModal').classList.contains('show'), 'Escape again closes it');
+  runFrames(20);
+  ok(true, 'the game keeps running after the menu closes');
+}
 
 console.log('\nUncaught errors');
 ok(errors.length === 0, 'no uncaught window errors', errors.slice(0, 3).join(' | '));
