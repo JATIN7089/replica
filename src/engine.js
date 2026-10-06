@@ -615,7 +615,8 @@ export function canTrain(state, clan, type) {
   if (def.warband && warbandOf(state, clan.id) + clan.training.filter((t) => UNITS[t.type].warband).length >= warbandCap(state, clan)) {
     return { ok: false, reason: 'Warband is at capacity' };
   }
-  if (totalPop(state, clan) >= popCap(state, clan)) return { ok: false, reason: 'No room — build a House' };
+  // Recruiting does not raise the population: the villager is armed, so a clan at
+  // its population cap can still field the warband (Northgard works the same way).
   if (civPop(state, clan) < 1) return { ok: false, reason: 'Needs a villager to recruit' };
   const m = MODS(clan);
   const cost = {};

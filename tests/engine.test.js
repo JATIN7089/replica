@@ -186,6 +186,30 @@ section('Combat');
   runSeconds(st, 20);
   ok(bar.building.done, 'barracks finished');
   ok(E.warbandCap(st, a) === 6, 'barracks raises warband cap', E.warbandCap(st, a));
+  // Northgard rule: recruiting arms a villager, so the population does not grow
+  {
+    const st2 = fresh(44);
+    const clan2 = st2.clans[0];
+    clan2.res.wood = 500;
+    clan2.res.stone = 500;
+    clan2.res.food = 500;
+    const bar2 = E.build(st2, st2.starts[0].id, 'barracks', 0);
+    ok(bar2.ok, 'a barracks for the recruitment test', bar2.reason || '');
+    runSeconds(st2, 20);
+    const before = E.totalPop(st2, clan2);
+    const res = E.trainUnit(st2, 'warrior', 0);
+    ok(res.ok, 'a warrior can be recruited', res.reason || '');
+    ok(E.totalPop(st2, clan2) === before, 'the villager is reserved: the clan does not grow while training',
+      `${E.totalPop(st2, clan2)} vs ${before}`);
+    runSeconds(st2, 12);
+    ok(E.totalPop(st2, clan2) === before, 'recruiting arms a villager instead of growing the clan',
+      `${E.totalPop(st2, clan2)} vs ${before}`);
+    ok(E.warbandOf(st2, 0) === 1, 'the armed villager joins the warband');
+    // and a clan whose houses are full can still arm its people
+    while (E.totalPop(st2, clan2) < E.popCap(st2, clan2)) runSeconds(st2, 6);
+    ok(E.canTrain(st2, clan2, 'warrior').ok, 'a clan at its population cap can still recruit',
+      E.canTrain(st2, clan2, 'warrior').reason || '');
+  }
   ok(E.trainUnit(st, 'warrior').ok, 'warrior training starts');
   ok(!E.trainUnit(st, 'shield').ok, 'shield bearer needs a forge');
   runSeconds(st, 12);

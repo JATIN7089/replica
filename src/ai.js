@@ -117,9 +117,13 @@ function pickColonizeTile(state, clan) {
         stone: clan.res.stone < 40,
         food: clan.res.food < 80,
       };
+      const noFoodSource = !E.buildingsOf(state, clan.id, 'hunter').length
+        && !E.buildingsOf(state, clan.id, 'farm').length
+        && !E.buildingsOf(state, clan.id, 'fishery').length;
       if (n.terrain === 'forest') score += starved.wood ? 5 : 3;
-      if (n.terrain === 'wildlife') score += starved.food ? 4 : 3;
-      if (n.terrain === 'fertile') score += 4;
+      if (n.terrain === 'wildlife') score += noFoodSource ? 7 : starved.food ? 4 : 3;
+      if (n.terrain === 'fertile') score += noFoodSource ? 6 : 4;
+      if (n.terrain === 'lake') score += noFoodSource ? 4 : 0;
       if (n.terrain === 'mountain' || n.terrain === 'iron') score += starved.stone ? 6 : 2;
       if (n.terrain === 'ruins') score += 1.5;
       if (n.terrain === 'lake') score -= 2;
@@ -138,52 +142,80 @@ function pickColonizeTile(state, clan) {
 
 function desiredBuildOrder(state, clan) {
   const c = (t) => buildingsOfType(state, clan.id, t).length;
-  const owned = myTiles(state, clan.id);
   const canPlace = (type) => !!pickBuildTile(state, clan, type);
   const list = [];
   const pop = E.totalPop(state, clan);
   const cap = E.popCap(state, clan);
   const year = E.yearOf(state);
+  const food = clan.res.food;
+  const stone = clan.res.stone;
+  const krown = clan.res.krown;
+  const workSlots = (c('woodcutter') + c('hunter') + c('farm') + c('fishery') + c('mine')) * 2;
+  // Housing is planned for the army too: soldiers cost population, so filling the
+  // cap with villagers would leave no room to train anyone.
+  const armyTarget = Math.min(E.warbandCap(state, clan), 2 + Math.floor(pop / 3));
+  const houseTarget = Math.max(2, Math.min(8, Math.ceil((Math.min(workSlots, 20) + armyTarget + 2 - 6) / 4)));
+  // Once the stores are deep, extra farms and hunters are villagers wasted on food
+  const wTarget = Math.min(4, 1 + Math.floor(pop / 6));
+  const fTarget = food > 260 ? 2 : Math.min(5, 1 + Math.floor(pop / 5));
+  const farmTarget = food > 260 ? Math.min(2, c('farm')) : Math.min(4, 1 + Math.floor(pop / 8));
 
-  // 1. an economy baseline first — wood and food before comfort
-  const wTarget = Math.min(4, 1 + Math.floor(pop / 6));   // jobs must keep up with mouths
-  const fTarget = Math.min(5, 1 + Math.floor(pop / 5));
-  const farmTarget = Math.min(4, 1 + Math.floor(pop / 8));
+  // 1. a working economy: food is the binding constraint in the first year, so two
+  // hunters and a woodcutter come before anything martial
   if (c('woodcutter') < 1) list.push('woodcutter');
   if (c('hunter') < 1) list.push('hunter');
-  if (c('woodcutter') < 2) list.push('woodcutter');
   if (c('hunter') < 2) list.push('hunter');
+  if (c('woodcutter') < 2) list.push('woodcutter');
+
+  // 2. then the war: the barracks teaches the clan to fight, the market pays for it
+  if (c('barracks') < 1 && pop >= 5) list.push('barracks');
+  if (c('market') < 1 && krown < 120) list.push('market');
+
+  // 3. houses, but only when there is work and food for more mouths
+  if (c('woodcutter') >= 1 && c('house') < 2 && cap - pop <= 2 && workSlots >= pop) list.push('house');
+  if (food > 60 && workSlots > pop && c('house') < houseTarget) list.push('house');
+  if (c('house') < 2) list.push('house');
+
+  // 4. growth: more producers, and a mine for the stone the later buildings need
+  if (c('mine') < 1 && canPlace('mine')) list.push('mine');
   if (c('farm') < 1 && canPlace('farm')) list.push('farm');
   if (c('fishery') < 1 && canPlace('fishery')) list.push('fishery');
-  // 2. only now spend wood on houses (the clan already has a woodcutter)
-  const workSlots = (c('woodcutter') + c('hunter') + c('farm') + c('fishery') + c('mine')) * 2;
-  if (c('woodcutter') >= 1 && c('house') < 2 && cap - pop <= 2 && workSlots >= pop) list.push('house');
-  if (c('fishery') < 1 && canPlace('fishery')) list.push('fishery');
-  if (c('altar') < 1 && year >= 1) list.push('altar');
-  if (c('market') < 1 && clan.res.krown < 140) list.push('market');
-  if (c('mine') < 1 && clan.res.stone < 70 && canPlace('mine')) list.push('mine');
-  if (c('barracks') < 1 && pop >= 7) list.push('barracks');
-  if (c('brewery') < 1 && clan.happiness < 58) list.push('brewery');
   if (c('woodcutter') < wTarget) list.push('woodcutter');
   if (c('hunter') < fTarget) list.push('hunter');
-  if (c('fishery') < Math.min(3, fTarget) && canPlace('fishery')) list.push('fishery');
   if (c('farm') < farmTarget && canPlace('farm')) list.push('farm');
-  if (c('tradingpost') < 1 && c('market') >= 1) list.push('tradingpost');
+  if (c('fishery') < Math.min(3, fTarget) && canPlace('fishery')) list.push('fishery');
+
+  // 5. the rest of the economy, then comfort and defence
+  if (c('tradingpost') < 1 && c('market') >= 1 && krown < 280) list.push('tradingpost');
   if (c('forge') < 1 && c('barracks') >= 1) list.push('forge');
-  if (workSlots >= pop && c('house') < Math.min(8, 1 + Math.floor(pop / 3))) list.push('house');
   if (c('ironmine') < 1 && c('forge') >= 1) list.push('ironmine');
-  if (c('altar') < 2) list.push('altar');
-  if (c('tower') < 1 && year >= 1) list.push('tower');
-  if (c('house') < 5) list.push('house');
-  if (c('tower') < 2) list.push('tower');
+  if (c('brewery') < 1 && clan.happiness < 58) list.push('brewery');
+  if (c('market') < 1) list.push('market');
+  if (c('altar') < 1 && year >= 1) list.push('altar');
+  if (c('tower') < 1 && year >= 1 && stone >= 30) list.push('tower');
+  if (c('barracks') < 2 && stone >= 15 && pop >= 12) list.push('barracks');
+  if (c('altar') < 2 && krown > 200) list.push('altar');
+  if (c('tower') < 2 && stone >= 40) list.push('tower');
   if (c('mine') < 2) list.push('mine');
-  if (c('barracks') < 2) list.push('barracks');
   return list.filter((t) => BUILDINGS[t]);
+}
+
+/** Diagnostic helper (also handy in the console): the jarl's current build queue. */
+export function aiPlan(state, clan = state.clans[1]) {
+  return desiredBuildOrder(state, clan);
 }
 
 function manageBuildings(state, clan) {
   const order = desiredBuildOrder(state, clan);
+  // Hold back the stone the next stone-hungry building in the queue needs: the jarl
+  // used to spend every last stone on luxuries and never get around to the barracks.
+  const pending = order.find((t) => BUILDINGS[t].cost && BUILDINGS[t].cost.stone && clan.res.stone < BUILDINGS[t].cost.stone);
+  const reserve = pending ? BUILDINGS[pending].cost.stone : 0;
   for (const type of order) {
+    const def = BUILDINGS[type];
+    if (reserve && type !== pending && def && def.cost && def.cost.stone) {
+      if (clan.res.stone < reserve + def.cost.stone) continue;
+    }
     const tile = pickBuildTile(state, clan, type);
     if (!tile) continue;
     const chk = E.canBuild(state, tile, clan, type);
@@ -221,7 +253,7 @@ function manageTraining(state, clan) {
     E.trainUnit(state, 'warchief', clan.id);
     return true;
   }
-  if (clan.res.food < 70) return false; // feed the clan before forging swords
+  if (clan.res.food < 55) return false; // feed the clan before forging swords
   if (band + clan.training.filter((t) => UNITS[t.type].warband).length >= targetBand) return false;
   let type = 'warrior';
   const forge = buildingsOfType(state, clan.id, 'forge').length;
