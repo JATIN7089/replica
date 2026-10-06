@@ -161,7 +161,7 @@ export function attachInput(app) {
       dragStart = null;
       return;
     }
-    if (e.button === 1 && view.kind === '3d' && e.ctrlKey) {
+    if (e.button === 1 && view.isWorld3D && e.ctrlKey) {
       rotating = { x: p.x, y: p.y };
       return;
     }
@@ -287,8 +287,7 @@ export function attachInput(app) {
   function jump(e) {
     const w = minimapToWorld(e);
     if (!w) return;
-    centerOn(w.x, w.y, canvas);
-    clampCam(canvas);
+    centerOn(w.x, w.y);
   }
 
   // --- keyboard
@@ -340,7 +339,7 @@ export function attachInput(app) {
     if (!dx && !dy) return;
     const len = Math.hypot(dx, dy) || 1;
     // speed scales with the zoom level so panning feels the same at any height
-    const speed = view.kind === '3d' ? view.getZoom() * 1.5 : 900 / view.getZoom() * 2.2 * 0.6;
+    const speed = view.isWorld3D ? view.getZoom() * 1.5 : 0;
     view.panBy(-(dx / len) * speed * dt, -(dy / len) * speed * dt);
   }
 

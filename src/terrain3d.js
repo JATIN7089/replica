@@ -27,7 +27,7 @@ export const BASE_Y = -1.15;
 /** How far the terrain extends beyond the outermost tiles (island shore). */
 export const SHORE_DROP = 3.4;
 /** How far the open sea reaches past the island (the horizon is fogged out). */
-export const SEA_MARGIN = 22;
+export const SEA_MARGIN = 48;
 /** Grid resolution of the terrain mesh, in world units. */
 export const TERRAIN_STEP = 0.32;
 
@@ -509,6 +509,7 @@ export function buildTerrainMesh(state, { pad = 3.6 } = {}) {
   geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.setIndex(index);
+  geo.userData.rasterGrid = { cols, rows, stride: 2 };
   geo.computeBoundingSphere();
 
   const mat = new THREE.MeshStandardMaterial({
@@ -733,7 +734,7 @@ export function buildTerritoryMesh(state) {
 }
 
 /**
- * Bend an existing geometry (a hex ring, a marker quad) so its vertices follow
+ * Bend an existing geometry (for example a cursor marker) so its vertices follow
  * the terrain surface. `worldX/worldZ` is where the mesh will be positioned.
  */
 export function drapeGeometry(state, geometry, worldX, worldZ, offset = 0.02) {
@@ -744,6 +745,52 @@ export function drapeGeometry(state, geometry, worldX, worldZ, offset = 0.02) {
     pos.setY(i, (terrainHeightAt(state, x, z) ?? WATER_LEVEL) + offset);
   }
   pos.needsUpdate = true;
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+/**
+ * A terrain-following, radial decal for hover/build/capture feedback. Alpha
+ * fades smoothly to zero at the edge, so gameplay feedback never sketches the
+ * underlying hex lattice onto the continuous landscape.
+ */
+export function buildSoftWashGeometry(state, worldX, worldZ, radius = 0.95, {
+  rings = 5, segments = 32, offset = 0.035,
+} = {}) {
+  const positions = [0, (terrainHeightAt(state, worldX, worldZ) ?? WATER_LEVEL) + offset, 0];
+  const colors = [1, 1, 1, 1];
+  const indices = [];
+  for (let ring = 1; ring <= rings; ring++) {
+    const t = ring / rings;
+    const r = radius * t;
+    const alpha = Math.pow(1 - t, 1.65);
+    for (let i = 0; i < segments; i++) {
+      const angle = (i / segments) * Math.PI * 2;
+      const dx = Math.cos(angle) * r;
+      const dz = Math.sin(angle) * r;
+      positions.push(dx, (terrainHeightAt(state, worldX + dx, worldZ + dz) ?? WATER_LEVEL) + offset, dz);
+      colors.push(1, 1, 1, alpha);
+    }
+  }
+  for (let i = 0; i < segments; i++) {
+    const next = (i + 1) % segments;
+    indices.push(0, 1 + next, 1 + i);
+  }
+  for (let ring = 1; ring < rings; ring++) {
+    const inner = 1 + (ring - 1) * segments;
+    const outer = 1 + ring * segments;
+    for (let i = 0; i < segments; i++) {
+      const next = (i + 1) % segments;
+      const a = inner + i, b = inner + next;
+      const c = outer + i, d = outer + next;
+      indices.push(a, d, c, a, b, d);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 4));
+  geometry.setIndex(indices);
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
   return geometry;

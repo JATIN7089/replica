@@ -34,7 +34,7 @@
         <button id="btnZoomOut" title="Zoom out">－</button>
         <button id="btnCamReset" title="Reset camera">⌂</button>
       </div>
-      <span id="rendererBadge" class="badge" title="Active renderer">3D</span>
+      <span id="rendererBadge" class="badge" data-renderer="raster3d" title="Northhold r5-world renderer">r5-world</span>
       <button id="btnMenu" class="ghost" title="Menu (Esc)">☰</button>
       <button id="btnHelp" class="ghost" title="How to play">?</button>
     </div>
@@ -132,11 +132,11 @@
       <button id="btnHelp2" class="ghost">How to play</button>
     </div>
     <input id="importFile" type="file" accept="application/json,.json" hidden />
-    <h3>Renderer — <span id="rendererLabel">3D</span></h3>
+    <h3>World renderer — <span id="rendererLabel">CPU 3D</span></h3>
     <p id="rendererNote" class="muted small"></p>
     <div class="start-actions">
-      <button id="btnUse3D">🧊 Use 3D</button>
-      <button id="btnUse2D">🗺️ Use 2D</button>
+      <button id="btnUse3D">🧊 Use WebGL 3D</button>
+      <button id="btnUseRaster3D">🖥️ Use CPU 3D</button>
     </div>
     <p id="saveStatus" class="muted small"></p>
   </div>

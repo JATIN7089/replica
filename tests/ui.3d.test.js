@@ -63,7 +63,7 @@ const THREE = await import(path.join(root, 'vendor/three.module.min.js'));
 const E = await import(path.join(root, 'src/engine.js'));
 const { aiStep } = await import(path.join(root, 'src/ai.js'));
 const { createRenderer3D } = await import(path.join(root, 'src/render3d.js'));
-const { tileElevation, elevationAt, WATER_LEVEL } = await import(path.join(root, 'src/terrain3d.js'));
+const { tileElevation, elevationAt, terrainHeightAt, WATER_LEVEL } = await import(path.join(root, 'src/terrain3d.js'));
 
 // ---------------------------------------------------------------- fake GL
 function fakeRenderer(canvas) {
@@ -183,7 +183,8 @@ section('Units & combat visuals');
     `${countIn(r3d.layers.units)} / ${state.units.length}`);
   const body = r3d.layers.units.children.find((g) => g.userData.style);
   ok(!!body && !!body.userData.parts.weapon, 'unit bodies expose animated parts');
-  ok(!!body.getObjectByName('selectRing'), 'units carry a selection ring');
+  ok(!!body.userData.parts.legL && !!body.userData.parts.legR, 'Phase 6 units have independent leg pivots');
+  ok(!!body.getObjectByName('selectRing'), 'units carry a circular selection marker');
   ok(r3d.layers.units.children.every((g) => typeof g.userData.unitId === 'number'),
     'every unit mesh knows which unit it belongs to');
 
@@ -198,6 +199,13 @@ section('Units & combat visuals');
   const ring = wMesh.getObjectByName('selectRing');
   ok(ring.material.opacity > 0.5, 'selected units light their ring', ring.material.opacity);
   ok(countIn(r3d.layers.fx) >= 2, 'order markers are drawn for selected units', countIn(r3d.layers.fx));
+  const orderLine = r3d.layers.fx.children.find((child) => child.isLine);
+  const linePositions = orderLine?.geometry.attributes.position;
+  const expectedFromY = terrainHeightAt(state, w.x, w.y) + 0.12;
+  const expectedToY = terrainHeightAt(state, dest.x, dest.y) + 0.12;
+  ok(linePositions && Math.abs(linePositions.getY(0) - expectedFromY) < 1e-4
+    && Math.abs(linePositions.getY(1) - expectedToY) < 1e-4,
+  'order route endpoints follow the continuous terrain');
 
   // damage → hp bar appears, floaters become sprites
   w.hp = w.maxHp * 0.5;
