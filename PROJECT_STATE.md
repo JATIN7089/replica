@@ -1,6 +1,6 @@
 # PROJECT_STATE
 
-_Last updated: 2026-10-06 (session 1, milestone 3)_
+_Last updated: 2026-10-06 (session 1, milestone 4)_
 
 ## Project State
 
@@ -8,21 +8,21 @@ _Last updated: 2026-10-06 (session 1, milestone 3)_
 vendored three.js for the 3D renderer, **zero network dependencies**, no build step. Served statically. Original code/art;
 no Northgard assets are used.
 
-Current version: **v0.3.0 — full 3D presentation, same simulation**.
+Current version: **v0.4.0 — 3D RTS foundation (height field, RTS camera, workers in the world)**.
 
-* Engine suite: **84/84 passing** (`node tests/engine.test.js`)
+* Engine suite: **90/90 passing** (`node tests/engine.test.js`)
 * Save/load suite: **48/48 passing** (`node tests/save.test.js`)
-* 3D model/camera suite: **101/101 passing** (`node tests/render3d.test.js`)
-* 3D integration suite: **49/49 passing** (`node tests/ui.3d.test.js`, jsdom + a fake GL backend)
+* 3D model/camera/picking suite: **102/102 passing** (`node tests/render3d.test.js`)
+* 3D integration suite: **72/72 passing** (`node tests/ui.3d.test.js`, jsdom + a fake GL backend)
 * UI smoke suite: **82/82 passing** (`node tests/ui.smoke.test.js`, needs jsdom)
-* Full run: `npm test` (364 assertions)
+* Full run: `npm test` (394 assertions)
 
 ## Current Goal
 
-Milestone 3 is complete: the game is presented in **full 3D** (3D map, terrain, buildings, units,
-effects) with the 2D canvas renderer kept as an automatic fallback, and the simulation untouched.
-Next goal: **clan differentiation + content** (clan-specific passives and starts, neutral monsters,
-events), then audio.
+Milestone 4 is complete: the world is a genuine **3D height field** (rolling ground, lake basins,
+mountain ridges) shown through an elevated Northgard-style RTS camera, with workers physically
+walking to resource nodes in the 3D world. Next goal: **clan differentiation + content**
+(clan-specific passives and starts, neutral monsters, events), then audio.
 
 ## Completed Features
 
@@ -63,6 +63,24 @@ events), then audio.
   autosave every in-game year; pause menu (`Esc`/☰) with save/load/export/import/restart; the start
   screen offers "Continue" when a save exists. Derived maps are rebuilt on load, and because the
   RNG state is stored a reloaded game continues *identically* (tested).
+* **3D terrain & world (v0.4.0)**: the map is a real height field — rolling plains (two octaves of
+  value noise), lake beds sunk below a shared water level, and tall mountain/iron ridges. Every hex
+  is a vertical column rooted at a common floor, so cliffs and steps between tiles read as relief.
+  Trees, rocks, ruins, reeds, animals, buildings, units, territory rings, highlights and effects all
+  sit on the surface of their own tile.
+* **Northgard-style RTS camera (v0.4.0)**: ~54° downward 3/4 view (clamped 35°–75° so it never
+  becomes a flat top-down board), perspective FOV 52°, free orbit (Q/E), tilt (R/F), zoom 7–72
+  (wheel/pinch/buttons), pan by drag/minimap/WASD. Pan, zoom, orbit and tilt are eased with a
+  frame-rate independent filter, and the camera aims at the ground height under its target, so it
+  glides instead of snapping and never stares at sea level on a hill.
+* **Mouse picking on real terrain (v0.4.0)**: the pointer ray is marched down through the height
+  field and bisected on the first surface it crosses, so clicking a mountain face selects the
+  mountain rather than the ground behind it (verified against 1345 sampled tile centres, with
+  occlusion-aware expectations).
+* **Workers in the world (v0.4.0)**: staffed woodcutters, hunters, fishers and mines send villagers
+  walking from the building to the resource node they exploit, harvesting there with the tool of
+  their trade, carrying a load home and starting again. Presentation only — the simulation remains
+  authoritative, and the party follows `building.workers` exactly.
 * **3D presentation (v0.3.0)**: the whole board is rendered in 3D through vendored three.js —
   extruded hex prisms per terrain, decorated forests/mountains/water with gentle motion, buildings
   and units as procedural low-poly meshes (body/head/arms/weapon parts), clans distinguished by
@@ -127,9 +145,13 @@ index.html → src/main.js ─┬─ src/view.js      (renderer adapter: 3D ⇄ 
 * **3D is presentation-only.** `render3d.js` reads `state` and mirrors tiles, buildings, units and
   effects into scene groups; it never mutates the simulation. Unit positions come straight from the
   engine's world coordinates (`u.x`, `u.y`) mapped by `hexTo3D`. Game rules stay in `engine.js`.
-* **Picking is maths, not raycasting against the scene.** `pickTileFromScreen` converts a pixel to a
-  world point on the ground plane and then to an axial tile, which is exact (455/455 sampled pixels
-  across five yaws) and cheap enough to run on every pointer move.
+* **Terrain height lives in the renderer, not the simulation.** `tileElevation(tile)` is a pure,
+  deterministic function of terrain type and axial coordinates (`src/models3d.js`), so the renderer,
+  the picking maths and the tests all agree on where the ground is without saving elevation into
+  the game state or touching balance.
+* **Picking marches the height field.** `pickTileFromScreen` walks the mouse ray down through the
+  world's vertical band (~20 samples), then bisects on the surface it crosses. It is exact on
+  cliffs (1345/1345 sampled visible tile centres) and cheap enough for every pointer move.
 * **Renderer switching swaps the canvas element.** A canvas that has handed out a 2D context cannot
   create a WebGL context and vice versa, so `view.js` builds the incoming renderer on a brand new
   canvas and only swaps it in once it succeeds — a failed switch leaves a working renderer alone.
@@ -171,38 +193,34 @@ index.html → src/main.js ─┬─ src/view.js      (renderer adapter: 3D ⇄ 
   to it) is imported with a relative ESM specifier. The game must run inside a preview iframe with
   no network access, so a CDN import is not acceptable; the vendored file is loaded lazily — the
   2D path never touches it.
+* **Work parties are presentation, recruiting arms villagers.** Staffed buildings spawn worker
+  meshes that walk to their resource node; the engine only knows `building.workers`. Related engine
+  rule added in v0.4.0: recruiting takes an existing villager (population unchanged, Northgard
+  style), so a clan whose houses are full can still field its warband.
 * **The 3D renderer takes a `rendererFactory` seam.** `createRenderer3D(canvas, { rendererFactory })`
   lets tests inject a fake GL backend, which is how the full 3D pipeline (scene graph, mesh
   bookkeeping, seasons, picking, disposal) is verified headlessly in jsdom.
 
 ## Files/Systems Modified Recently
 
-* `vendor/three.module.min.js` + `vendor/THREE-LICENSE.txt` — **new**: vendored three.js r169 (MIT).
-* `src/models3d.js` — **new**: procedural 3D geometry — hex prism tiles, terrain colours, trees,
-  rocks, mountains, water, 15 building models, 5 unit models, selection rings, scaffolds.
-* `src/render3d.js` — **new**: scene/lights/shadow setup, `hexTo3D`/`tileTo3D`, camera rig
-  (`createCameraRig`, `CAM`, pan/zoom/orbit/tilt clamps), `pickTileFromScreen`, `screenToGround`,
-  `groundToScreen`, per-frame sync of terrain/decorations/territory/buildings/units/fx, `dispose`.
-* `src/view.js` — **new**: renderer adapter; owns the live canvas, WebGL probe, `use3D`/`use2D`
-  switching, and the shared camera/hit-test API that input and UI use.
-* `src/input.js` — refactored onto the view adapter: panning, zoom-at-cursor, camera keys Q/E/R/F,
-  middle-drag pan and middle-drag+Ctrl orbit, `view.pickRadius()` hit tests; listeners now sit on
-  the stage element and pointer capture is optional (jsdom-safe).
-* `src/render.js` — `setupCanvas` made rebindable (`surfaces.rebind`, live `canvas`/`ctx` getters) so
-  the 2D renderer can be re-attached to a swapped canvas.
-* `src/main.js` — `createView` wiring, `setRenderer('3d'|'2d')` + `syncRendererUI()`, hold-to-repeat
-  camera buttons, renderer section in the pause menu, `view`/`setRenderer` on the debug hook.
-* `src/ui.js` / `index.html` / `src/style.css` — camera control cluster, "Renderer — 3D/2D" pause
-  section with fallback reason, Q/E/R/F line in help.
-* `tests/render3d.test.js` — **new**: 101 tests for geometry, camera rig clamps, picking accuracy,
-  model building and scene sync.
-* `tests/ui.3d.test.js` — **new**: 49 jsdom integration tests running the real app's 3D renderer
-  through a fake GL backend (world build, buildings, units/combat, territory, seasons, camera,
-  900-frame run, disposal, canvas-swap switch).
-* `tests/ui.smoke.test.js` — extended to 82 tests: renderer state, 3D camera fallback keys, pause
-  menu renderer section, `getContext('2d')`-only canvas stub.
-* `package.json` — `test` now runs all five suites; new `test:3d` script.
-* `README.md`, `PROJECT_STATE.md` — 3D controls, fallback behaviour and new counts.
+* `src/models3d.js` — **3D foundation**: `tileElevation`/`worldToTile`/`elevationAt` height field,
+  `BASE_Y`/`WATER_LEVEL`, columns extruded to their own elevation, decorations on the surface, and
+  the new villager (`buildVillagerMesh`) + `workToolFor` for work parties.
+* `src/render3d.js` — **RTS camera**: `rigStep`/`rigGroundY` smoothing, FOV 52°, pitch clamped to a
+  3/4 view, marching height-aware `pickTileFromScreen`, elevation-aware placement of every object,
+  and the `workers` layer (work parties walking to resource nodes).
+* `src/ai.js` — jarl economy rebuilt around waves (food → barracks → market → houses → producers),
+  stone reserved for the next stone-hungry building, food targets that stop growing when the stores
+  are deep, colonisation that leads when cramped, and `aiPlan()` for diagnosis.
+* `src/engine.js` — recruiting arms an existing villager instead of raising population.
+* `src/input.js` / `src/main.js` / `src/view.js` — camera keys and buttons, renderer switch, canvas
+  swap and the adapter API (from v0.3.0, unchanged this milestone).
+* `tests/render3d.test.js` — extending to 102: height field, RTS camera (pitch/FOV/smoothing),
+  occlusion-aware picking, villager/work-tool models.
+* `tests/ui.3d.test.js` — extending to 72: terrain relief, buildings on their tile surface, work
+  parties leaving/returning/home-again, units following the ground, mountain picking.
+* `tests/engine.test.js` — 90 tests including the new recruiting rule.
+* `README.md`, `PROJECT_STATE.md`, `package.json` — 3D foundation, camera and worker docs.
 
 ## How To Run
 
@@ -219,13 +237,17 @@ npm i --no-save jsdom && npm run test:ui
 
 ## Last Stable Milestone
 
-**v0.3.0 — full 3D presentation.** Commit: `feat: 3D renderer (map, units, buildings) with 2D
-fallback`. Verified by 364 assertions across five suites: 84 engine tests (20-minute headless
-simulation, all four victory paths, AI robustness), 48 save/load tests (exact round trip and
-byte-identical continuation after a reload), 101 3D model/camera/picking tests, 49 jsdom 3D
-integration tests (real app + fake GL backend: full world, buildings, combat, territory, seasons,
-camera clamps, 900-frame AI run, disposal, canvas-swap switch) and 82 jsdom UI tests (boots the app,
-renders, builds, settles, staffs jobs, trains, saves, loads, exports, imports, pause menu,
-renderer switching, game over overlay).
+**v0.4.0 — 3D RTS foundation and Northgard-style camera.** Commits:
+`feat: establish 3D RTS foundation and Northgard-style camera` and
+`fix: jarl economy — stone budgeting, a war chest and working villagers`.
+Verified by 394 assertions across five suites: 90 engine (20-minute headless simulation, all four
+victory paths, recruiting rule, AI robustness), 48 save/load (exact round trip and byte-identical
+continuation after a reload), 102 3D model/camera/picking tests (height field, 3/4 camera clamps and
+smoothing, 1345/1345 visible tile centres picked correctly), 72 jsdom 3D integration tests (real app
++ fake GL backend: relief, buildings on the surface, work parties round-tripping to resource nodes,
+units following the ground, mountain picking, 900-frame AI run, disposal, canvas swap) and 82 jsdom
+UI tests (boots the app, renders, builds, settles, staffs jobs, trains, saves, loads, exports,
+imports, pause menu, renderer switching, game over overlay).
 
-Previous milestones: **v0.2.0 — save/load + pause menu**; **v0.1.0 — playable prototype**.
+Previous milestones: **v0.3.0 — full 3D presentation**; **v0.2.0 — save/load + pause menu**;
+**v0.1.0 — playable prototype**.

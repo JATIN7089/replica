@@ -28,15 +28,18 @@ Then: pick a clan, pick a difficulty, hit **Raise the banner**.
 | System | Status | Notes |
 |---|---|---|
 | Hex map + camera | ✅ | 91-tile procedural map: plains, forest, fertile, wildlands, lakes, mountains, iron, ruins. Drag/WASD/pinch pan, wheel zoom, minimap. |
-| 3D presentation | ✅ | The whole board in 3D: extruded hex terrain, decorated forests/mountains/water, procedural buildings and units, selection rings, projectiles, snow in winter. Orbit/tilt/zoom camera. Automatic 2D fallback when WebGL is missing, and a 3D ⇄ 2D switch in the pause menu. |
+| 3D world | ✅ | A real height field: rolling ground, lake basins below the water line, tall mountain/iron ridges. Every hex is a column rooted at a shared floor, so cliffs read as relief instead of a flat board. Trees, rocks, buildings, units and territory follow the surface. |
+| RTS camera | ✅ | Northgard-style elevated 3/4 view (~54° down, never a flat top-down board), perspective FOV 52°, free orbit, tilt, zoom 7–72, smooth eased pan/zoom/orbit/tilt, aims at the ground under the target. |
+| Workers in the world | ✅ | Staffed woodcutters, hunters, fishers and mines send villagers walking to the resource node, harvesting with the right tool and carrying the load home. |
+| 3D presentation | ✅ | The whole board in 3D: richly decorated forests/mountains/water, procedural buildings and units, selection rings, projectiles, snow in winter. Automatic 2D fallback when WebGL is missing, and a 3D ⇄ 2D switch in the pause menu. |
 | Territory | ✅ | Settle unclaimed tiles bordering your land for food; capture enemy tiles by standing on them with a warband. |
 | Resources | ✅ | Food, wood, krowns, stone, iron, lore + fame and happiness, with per-month rates in the HUD. |
 | Buildings | ✅ | 14 types: Town Hall, House, Woodcutter's Lodge, Hunter's Lodge, Farm, Fisherman Hut, Stone/Iron Mine, Forge, Market, Brewery, Altar of Odin, Barracks, Watchtower, Trading Post. |
-| Workers | ✅ | Villagers are assigned per building with a worker picker; idle villagers do nothing. |
+| Workers | ✅ | Villagers are assigned per building with a worker picker; idle villagers do nothing — and in the 3D world the assigned ones visibly walk out to the forest, mine, lake or field. |
 | Population | ✅ | Population cap from houses, growth driven by happiness and food, starvation kills villagers. |
 | Seasons | ✅ | Spring/summer/autumn/winter cycle. Winter collapses food output, raises consumption and freezes the map white. |
 | Combat | ✅ | Warriors, Axe Throwers, Shield Bearers, Scouts and a Warchief hero. Auto-acquire, chase, buildings take damage, towers shoot, units gain fame when they kill. |
-| Enemy AI | ✅ | A rival jarl that expands, staffs jobs, chases deposits, builds a settlement, trains a warband and attacks. Three difficulties (Thrall/Karl/Jarl). |
+| Enemy AI | ✅ | A rival jarl that expands, staffs jobs, chases deposits, budgets stone for a barracks before luxuries, builds a settlement, trains a warband up to its cap and attacks. Three difficulties (Thrall/Karl/Jarl). |
 | Blessings | ✅ | Lore → Altar → choose 1 of 3 permanent blessings (12 available, up to 5 per game). |
 | Victory | ✅ | Fame (300), Trade (2200 krowns with a Market/Trading Post), Domination (burn their Town Hall), or highest fame after 9 years. |
 | Save/load | ✅ | localStorage save + autosave every in-game year, JSON export/import, continue from the start screen, pause menu. |
@@ -76,15 +79,15 @@ tools/serve.mjs       dependency-free static server
 vendor/               three.js r169 (MIT) — vendored so the game needs no CDN
 tests/engine.test.js  84 simulation tests (map, economy, seasons, combat, victory, AI, determinism)
 tests/save.test.js    48 save/load tests (round trip, exact reload determinism, bad input)
-tests/render3d.test.js 101 3D tests (geometry, camera clamps, exact screen picking, model building)
-tests/ui.3d.test.js   49 jsdom tests running the real 3D pipeline through a fake GL backend
+tests/render3d.test.js 102 3D tests (height field, camera clamps + smoothing, exact terrain picking, models)
+tests/ui.3d.test.js   72 jsdom tests running the real 3D pipeline through a fake GL backend
 tests/ui.smoke.test.js 82 jsdom tests that boot the real app and drive it (2D fallback path)
 ```
 
 ## Tests
 
 ```bash
-npm test              # all five suites (364 assertions)
+npm test              # all five suites (394 assertions)
 npm run test:engine   # headless simulation (needs no dependencies)
 npm run test:3d       # 3D models/camera/picking + jsdom 3D integration
 npm run test:ui       # boots the app in jsdom (needs: npm i --no-save jsdom)
@@ -92,7 +95,9 @@ npm run test:ui       # boots the app in jsdom (needs: npm i --no-save jsdom)
 
 The 3D suites are honest about their limits: jsdom has no WebGL, so the integration suite injects a
 fake GL backend through the renderer's `rendererFactory` seam and asserts on the real scene graph —
-mesh counts track the world exactly, picks are pixel-accurate, and 900 frames run with the AI live.
+mesh counts track the world exactly, picks are pixel-accurate (including cliffs, which is why the
+picker marches the height field), work parties really do travel to a resource node and back, and
+900 frames run with the AI live.
 
 The engine suite simulates thousands of ticks: it checks map fairness (every start gets wood,
 fertile land, stone, iron and water), that workers are the only source of production, winter
@@ -107,7 +112,7 @@ collapse over ~20 minutes of play) and determinism for a fixed seed.
 4. Clans differentiated by more than modifiers (Raven scouting, Wolf aggression) — done partly
 5. More content: events, runestones, neutral monsters, a 3rd/4th clan, larger maps
 6. Audio: ambient wind/waves, UI clicks, battle cues (WebAudio, original synthesis)
-7. Art pass: more terrain variety, animated unit rigs, banner/hero portraits
+7. Art pass: more terrain variety, animated unit rigs, banner/hero portraits, instanced vegetation
 8. Mobile UX polish and performance budget
 
 ## License
